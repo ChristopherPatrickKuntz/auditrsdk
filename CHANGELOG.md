@@ -7,40 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- `SDK_VERSION` (used in the `User-Agent` header) is now inlined
-  at build time from `package.json` via tsup `define`, so it can
-  no longer drift from the package version. Vitest is configured
-  with the same define so unit tests see the real version too.
-- `PaymentRequiredError`'s TSDoc no longer references a
-  nonexistent `client.http.raw()` method; the doc now describes it
-  as an internal flow control signal that consumers only see if
-  they reach into the `@internal` helpers directly. README error
-  table updated to match.
-- `paidPost` now accepts an optional `AbortSignal` and forwards it
-  to both the challenge and signed-retry `fetch` calls. Callers
-  using the high-level methods (`audits.*`, `monitoring.*`,
-  `facilitator.signup`, `facilitator.renew`) pick this up
-  automatically when an internal API adds signal threading.
-- A malformed JSON body returned from the unusual "2xx without a
-  402" branch of `paidPost` now surfaces as a `ValidationError`
-  instead of a bare `SyntaxError`, matching the wrapping every
-  other JSON parse site already does.
-
-### Added
-
-- `tsconfig.examples.json` plus a `typecheck:examples` npm script
-  and CI step so the reference signers under `examples/` are
-  guarded against bit-rot. `prepublishOnly` runs both typecheck
-  passes.
-- 5 new vitest cases: `paidPost` 2xx-without-402 happy path,
-  malformed 2xx as `ValidationError`, `facilitator.supported`
-  happy path + ValidationError on missing `kinds`,
-  `facilitator.adminInfo` happy path + bare-token rejection,
-  `facilitator.renew` x402 flow. Total: 24 tests, all passing.
-
 ## [0.2.0] - 2026-05-28
+
+First publish to npm. 0.1.0 was never released, so the
+contents of this entry are everything shipped to the registry.
 
 ### Added
 
@@ -66,8 +36,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FacilitatorAdminInfo`, `FacilitatorSupportedKind`.
 - New examples: `examples/facilitator-trial.ts` and
   `examples/facilitator-signup.ts`.
-- 5 new vitest cases covering trial validation, parsed shape,
-  signup x402 flow, renew validation. Total: 17 tests passing.
+- `tsconfig.examples.json` plus a `typecheck:examples` npm script
+  and CI step so the reference signers under `examples/` are
+  guarded against bit-rot. `prepublishOnly` runs both typecheck
+  passes.
+- 10 new vitest cases (5 facilitator API + 5 review-fix
+  coverage): trial validation, parsed shape, signup x402 flow,
+  renew validation, `paidPost` 2xx-without-402 happy path,
+  malformed 2xx as `ValidationError`, `facilitator.supported`
+  happy path + ValidationError on missing `kinds`,
+  `facilitator.adminInfo` happy path + bare-token rejection,
+  `facilitator.renew` x402 flow. Total: 24 tests, all passing.
+
+### Changed
+
+- `SDK_VERSION` (used in the `User-Agent` header) is now inlined
+  at build time from `package.json` via tsup `define`, so it can
+  no longer drift from the package version. Vitest is configured
+  with the same define so unit tests see the real version too.
+- `PaymentRequiredError`'s TSDoc no longer references a
+  nonexistent `client.http.raw()` method; the doc now describes it
+  as an internal flow control signal that consumers only see if
+  they reach into the `@internal` helpers directly. README error
+  table updated to match.
+- `paidPost` now accepts an optional `AbortSignal` and forwards it
+  to both the challenge and signed-retry `fetch` calls. Callers
+  using the high-level methods (`audits.*`, `monitoring.*`,
+  `facilitator.signup`, `facilitator.renew`) pick this up
+  automatically when an internal API adds signal threading.
+- A malformed JSON body returned from the unusual "2xx without a
+  402" branch of `paidPost` now surfaces as a `ValidationError`
+  instead of a bare `SyntaxError`, matching the wrapping every
+  other JSON parse site already does.
 
 ## [0.1.0]
 
