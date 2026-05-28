@@ -7,7 +7,7 @@
 
 import type { AuditTier, MonitoringTier, Chain } from './types.js';
 
-export const DEFAULT_BASE_URL = 'https://api.auditr.xyz' as const;
+export const DEFAULT_BASE_URL = 'https://api.auditr.xyz';
 
 export const AUDIT_TIERS = {
   quick: { priceUsd: 1, label: 'Quick site scan' },

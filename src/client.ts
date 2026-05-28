@@ -227,7 +227,10 @@ class AuditsApi {
     const pollIntervalMs = options.pollIntervalMs ?? this.parent.config.defaultPollIntervalMs;
     const timeoutMs = options.timeoutMs ?? this.parent.config.defaultTimeoutMs;
     const start = Date.now();
-    while (true) {
+    // Poll until terminal status or timeout. Bounded by timeoutMs
+    // below; the explicit `for (;;)` is the conventional way to
+    // satisfy strict lints that reject `while (true)`.
+    for (;;) {
       const report = await this.get(auditId, options.signal);
       if (options.onStatus) {
         options.onStatus(report.status);
