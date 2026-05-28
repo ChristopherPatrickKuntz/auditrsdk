@@ -31,9 +31,15 @@ export const SUPPORTED_EVM_CHAINS: readonly Chain[] = [
 ] as const;
 
 /**
- * CAIP-2 network identifiers the x402 facilitator may advertise. The
- * facilitator's `/supported` endpoint is the authoritative source per
- * request; this list is documentation for callers building UIs.
+ * CAIP-2 mainnet identifiers for the EVM chains the platform supports.
+ * The authoritative source for any given request is the
+ * `PAYMENT-REQUIRED` challenge on the 402; use this map only for UI
+ * defaults and chain id parsing.
+ *
+ * Solana is intentionally absent: x402 facilitators advertise Solana
+ * accepts using a value derived from the cluster's genesis hash, not
+ * a friendly `solana:mainnet` token. Pick the network value from the
+ * `accepts` array at request time rather than hardcoding it.
  */
 export const SUPPORTED_NETWORKS_CAIP2 = {
   ethereum: 'eip155:1',
@@ -42,5 +48,4 @@ export const SUPPORTED_NETWORKS_CAIP2 = {
   optimism: 'eip155:10',
   polygon: 'eip155:137',
   bsc: 'eip155:56',
-  solana: 'solana:mainnet',
 } as const;

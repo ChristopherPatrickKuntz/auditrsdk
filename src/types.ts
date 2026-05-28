@@ -85,12 +85,42 @@ export interface PaymentSigner {
 
 export interface PaymentAccept {
   scheme: 'exact';
+  /**
+   * CAIP-2 network identifier. The exact value depends on the
+   * facilitator the resource server uses. For EVM networks the form
+   * is `eip155:<chain-id>` (e.g. `eip155:8453` for Base mainnet,
+   * `eip155:84532` for Base Sepolia). For Solana the facilitator
+   * typically advertises a value derived from the cluster's genesis
+   * hash; do not assume `solana:mainnet`.
+   */
   network: string;
+  /**
+   * Asset contract address (EVM) or mint (Solana). USDC by default
+   * across the Auditr API; verify against `extra.name` when present.
+   */
   asset?: string;
+  /**
+   * Settlement recipient. Pay the authorization to this address.
+   */
   payTo: string;
-  price: string;
-  maxAmountRequired?: string;
+  /**
+   * Amount in atomic units (NOT a decimal price). USDC has six
+   * decimals, so `"1000000"` represents one USDC. Cast to BigInt
+   * before passing into a signing helper that expects a uint256.
+   */
+  amount: string;
+  /**
+   * Facilitator's hint for how long the authorization should remain
+   * valid. Use as the `validBefore` lower bound; the signer is free
+   * to pick a tighter window.
+   */
+  maxTimeoutSeconds?: number;
   description?: string;
+  /**
+   * Facilitator specific extension. For EIP-3009 EVM accepts this
+   * usually carries `{ name: "USDC", version: "2" }` matching the
+   * EIP-712 domain. For Solana it may carry a `feePayer`.
+   */
   extra?: Record<string, unknown>;
 }
 

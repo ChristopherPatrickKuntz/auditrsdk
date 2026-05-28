@@ -64,12 +64,37 @@ response in step 5.
       "scheme": "exact",
       "network": "eip155:8453",
       "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "amount": "25000000",
       "payTo": "0x...",
-      "price": "25.00"
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USDC", "version": "2" }
+    },
+    {
+      "scheme": "exact",
+      "network": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+      "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "amount": "25000000",
+      "payTo": "...",
+      "maxTimeoutSeconds": 300,
+      "extra": { "feePayer": "..." }
     }
   ]
 }
 ```
+
+Notes on the shape:
+
+- `amount` is in **atomic units**, not a decimal price. USDC has six
+  decimals, so `"25000000"` represents twenty five USDC. Cast with
+  `BigInt(accept.amount)` before passing into an EIP-3009
+  authorization.
+- The `network` value for Solana is derived from the cluster's
+  genesis hash; do not hardcode `solana:mainnet`. The exact form
+  depends on the facilitator the resource server uses.
+- `extra` carries facilitator specific extensions. For EVM accepts
+  it typically carries the EIP-712 domain name + version. For
+  Solana it may carry a `feePayer` the facilitator will use to
+  cover the transaction fee.
 
 Each `accepts` entry is a network the resource server is willing to
 settle on. The caller picks the one the signer can produce an

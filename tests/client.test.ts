@@ -121,7 +121,7 @@ describe('paid POST flow', () => {
           scheme: 'exact',
           network: 'eip155:8453',
           payTo: '0x0000000000000000000000000000000000000000',
-          price: '25.00',
+          amount: '25000000',
         },
       ],
     };
@@ -239,7 +239,7 @@ describe('paid POST flow', () => {
     const challenge = {
       x402Version: 2,
       resource: { url: 'https://api.example.com/api/x402/audits/quick' },
-      accepts: [{ scheme: 'exact', network: 'eip155:8453', payTo: '0x0', price: '1.00' }],
+      accepts: [{ scheme: 'exact', network: 'eip155:8453', payTo: '0x0', amount: '1000000' }],
     };
     const fetchImpl = vi.fn().mockResolvedValueOnce(
       new Response('', {

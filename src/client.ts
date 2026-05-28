@@ -121,17 +121,23 @@ export class Auditr {
     }
 
     // Step 2: signer produces the PAYMENT-SIGNATURE for one accept.
-    // We pick the first network the signer can handle; the signer may
-    // throw to indicate it has no compatible accept.
+    // We pick the first network in the accepts list; sophisticated
+    // signers can inspect `challenge.accepts` to choose differently
+    // by overriding `sign`. The validation that the list is non
+    // empty stays outside the catch so the resulting ValidationError
+    // is not masked as a SignerError.
+    const accept = challenge.accepts[0];
+    if (!accept) {
+      throw new ValidationError('PAYMENT-REQUIRED.accepts is empty', null);
+    }
     let signature: string;
     try {
-      const accept = challenge.accepts[0];
-      if (!accept) {
-        throw new ValidationError('PAYMENT-REQUIRED.accepts is empty', null);
-      }
       signature = await this.signer.sign(challenge, accept);
     } catch (err) {
       throw new SignerError('Signer failed to produce PAYMENT-SIGNATURE', err);
+    }
+    if (typeof signature !== 'string' || signature.length === 0) {
+      throw new SignerError('Signer returned an empty PAYMENT-SIGNATURE', null);
     }
 
     // Step 3: retry with the signed header.
