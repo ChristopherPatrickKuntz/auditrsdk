@@ -41,11 +41,11 @@ import type {
 import {
   assertOk,
   buildUserAgent,
-  parsePaymentSettlementHeader as parsePaymentSettlementHeaderHeader,
+  parsePaymentSettlement,
   readBodyTruncated,
 } from './http.js';
 
-type ParsedSettlement = ReturnType<typeof parsePaymentSettlementHeaderHeader>;
+type ParsedSettlement = ReturnType<typeof parsePaymentSettlement>;
 
 const TERMINAL_STATUSES: ReadonlySet<AuditStatus> = new Set([
   'completed',
@@ -91,7 +91,7 @@ export class Auditr {
   }
 
   /** @internal */
-  async paidPost<T>(path: string, body: unknown): Promise<{ response: T; settlement?: ReturnType<typeof parsePaymentSettlementHeader> }> {
+  async paidPost<T>(path: string, body: unknown): Promise<{ response: T; settlement?: ReturnType<typeof parsePaymentSettlement> }> {
     const url = `${this.baseUrl}${path}`;
     const baseHeaders: Record<string, string> = {
       'content-type': 'application/json',
@@ -147,7 +147,7 @@ export class Auditr {
     const retryBody = await readBodyTruncated(retry);
     assertOk(retry, retryBody);
 
-    const settlement = parsePaymentSettlementHeader(
+    const settlement = parsePaymentSettlement(
       retry.headers.get('payment-response'),
     );
 
