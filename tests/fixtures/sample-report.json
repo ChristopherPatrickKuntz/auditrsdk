@@ -1,0 +1,31 @@
+{
+  "audit": {
+    "id": "3dd88ae3-868f-406c-a868-9c0cc1be23f0",
+    "status": "completed",
+    "score": "A",
+    "project_name": "example.com",
+    "created_at": "2026-05-28T01:00:00.000Z",
+    "completed_at": "2026-05-28T01:03:42.000Z",
+    "summary": {
+      "management_summary": "Example.com is a Web3 site that integrates wallet flows over WalletConnect and Phantom.",
+      "security_assessment": "Strong transport security, isolation directives, and CSP baseline.",
+      "grade_rationale": "Foundational hardening in place; remaining items are low severity advisory."
+    },
+    "severity_counts": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 1,
+      "info": 7
+    }
+  },
+  "findings": [
+    {
+      "severity": "low",
+      "title": "Weak CSP Directives",
+      "category": "site:headers",
+      "description": "style-src-attr permits 'unsafe-inline' for framework compatibility.",
+      "recommendation": "Migrate inline style attributes to hashed equivalents over time."
+    }
+  ]
+}

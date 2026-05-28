@@ -1,0 +1,22 @@
+# Source files are shipped via the `files` field in package.json; this
+# file scopes what npm publishes to the minimum needed at install time.
+.github/
+docs/
+examples/
+tests/
+node_modules/
+coverage/
+
+.editorconfig
+.eslintrc*
+.eslint.config.*
+.gitignore
+.prettierrc*
+.prettierignore
+tsup.config.ts
+vitest.config.ts
+tsconfig.json
+ARCHITECTURE.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+SECURITY.md

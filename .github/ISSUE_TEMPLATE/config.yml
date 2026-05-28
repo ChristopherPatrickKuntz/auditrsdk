@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: mailto:info@auditr.xyz
+    about: Do not file security issues publicly. Email us instead.
+  - name: Backend or API question
+    url: https://auditr.xyz
+    about: For questions about the Auditr platform itself, see the main site.

@@ -1,0 +1,30 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build output
+dist/
+*.tsbuildinfo
+coverage/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Test fixtures generated locally
+tests/**/.cache/
+
+# Lockfiles other than package-lock.json
+yarn.lock
+pnpm-lock.yaml

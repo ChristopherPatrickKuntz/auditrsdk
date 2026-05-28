@@ -1,0 +1,9 @@
+# Default owner for everything in this repository.
+* @auditrxyz
+
+# Schema changes require sign off because they affect downstream
+# consumers parsing audit reports.
+/src/schema/ @auditrxyz
+
+# CI configuration changes.
+/.github/ @auditrxyz
