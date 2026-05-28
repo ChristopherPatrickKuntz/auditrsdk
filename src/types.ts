@@ -12,6 +12,21 @@ export type AuditTier = 'quick' | 'standard' | 'web3';
 
 export type MonitoringTier = 'basic' | 'pro' | 'enterprise';
 
+/**
+ * Subscription tier for the Auditr-hosted x402 facilitator
+ * (https://facilitator.auditr.xyz). `trial` is free and minted via
+ * `auditr.facilitator.trial()`. `basic`, `pro`, and `enterprise` are
+ * minted by paying USDC via x402 on the matching signup endpoint.
+ *
+ * `unlimited` is internal-only and not mintable through the public
+ * SDK; included in the type for completeness when inspecting
+ * server-returned key rows.
+ */
+export type FacilitatorTier = 'trial' | 'basic' | 'pro' | 'enterprise' | 'unlimited';
+
+/** Paid (x402-gated) facilitator tiers. */
+export type PaidFacilitatorTier = Exclude<FacilitatorTier, 'trial' | 'unlimited'>;
+
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
 export type Chain =
@@ -330,4 +345,141 @@ export interface CreateMonitoringResponse {
    * x402 settlement details when the facilitator returned them.
    */
   settlement?: PaymentSettlement;
+}
+
+/**
+ * Request body for `POST /api/facilitator/trial` (free) and
+ * `POST /api/x402/facilitator/signup/<tier>` (paid).
+ */
+export interface FacilitatorSignupRequest {
+  /**
+   * Display name shown in our admin UI for support and revoke flows.
+   * Not a secret. Keep it short and recognizable (e.g. "Acme bot
+   * fleet" or "alice's research agent").
+   */
+  label: string;
+
+  /**
+   * Off-band contact (email, Telegram handle, URL) used if we ever
+   * need to reach you (revoke compromised key, upgrade pricing,
+   * incident notification). Not displayed to other consumers.
+   */
+  ownerContact: string;
+
+  /**
+   * Comma-separated list of CAIP-2 network ids the key may settle
+   * on, or `'*'` for any network the facilitator currently
+   * advertises. Defaults to `'*'`.
+   */
+  networksCsv?: string;
+}
+
+/**
+ * Request body for `POST /api/x402/facilitator/renew/<tier>`. Pays
+ * the matching tier's price; pushes `paidThroughAt` forward by 30
+ * days. Paying a higher-tier renewal upgrades the stored tier in the
+ * same call.
+ */
+export interface FacilitatorRenewRequest {
+  /** The `keyId` returned by a prior `signup()` or `trial()` call. */
+  keyId: string;
+}
+
+/**
+ * Response from `POST /api/x402/facilitator/signup/<tier>`,
+ * `POST /api/facilitator/trial`, and (on the body of) the renew
+ * endpoints. The full Bearer `token` is returned ONCE; persist it
+ * securely on the caller side. Auditr cannot recover it.
+ */
+export interface FacilitatorKey {
+  /**
+   * Short public identifier (8 hex chars). Use this in log lines
+   * and as the `keyId` parameter for renew calls.
+   */
+  keyId: string;
+
+  /** Current subscription tier. */
+  tier: FacilitatorTier;
+
+  /**
+   * Number of settlements allowed per calendar month under the
+   * current tier. `-1` means unlimited.
+   */
+  monthlySettleQuota: number;
+
+  /**
+   * ISO-8601 timestamp after which the paid subscription lapses
+   * and the key falls back to the trial quota (100/mo). `null` for
+   * trial keys.
+   */
+  paidThroughAt: string | null;
+
+  /**
+   * The full Bearer token: `auditr_pub_<keyId>_<43chars>`. Send as
+   * `Authorization: Bearer <token>` on calls to
+   * `https://facilitator.auditr.xyz/verify` and `/settle`. Never
+   * returned again after this response.
+   */
+  token: string;
+
+  /**
+   * Public URL of the facilitator the token authenticates against.
+   * Defaults to `https://facilitator.auditr.xyz`.
+   */
+  facilitatorUrl: string;
+
+  /**
+   * URL of the FAQ section that documents integration. Deep-linked
+   * so the response is itself the docs.
+   */
+  integrationDocs: string;
+}
+
+/**
+ * Response from the renew endpoints. Same shape minus the `token`
+ * (the existing token is unchanged on renew).
+ */
+export interface FacilitatorRenewResponse {
+  keyId: string;
+  tier: FacilitatorTier;
+  paidThroughAt: string;
+}
+
+/**
+ * `GET /admin/info` response (auth-required, Bearer token of the key
+ * itself). Useful for checking remaining quota and paid_through
+ * before a long run.
+ */
+export interface FacilitatorAdminInfo {
+  ok: true;
+  service: 'auditr_facilitator';
+  networkMode: 'mainnet' | 'testnet';
+  chains: string[];
+  feePolicy: {
+    evmPct: number;
+    evmFloorUsd: number;
+    svmPct: number;
+    svmFloorUsd: number;
+    extractionWired: boolean;
+  };
+  auth: {
+    keyId: string;
+    label: string;
+    tier: FacilitatorTier;
+    effectiveTier: FacilitatorTier;
+    paidThroughAt: string | null;
+    monthlySettleQuota: number;
+    monthlySettleUsed: number;
+    monthlyPeriodStart: string;
+  };
+}
+
+/**
+ * `GET /supported` response (public). Lists every (scheme, network)
+ * combination the facilitator can verify and settle.
+ */
+export interface FacilitatorSupportedKind {
+  scheme: string;
+  network: string;
+  x402Version: number;
 }

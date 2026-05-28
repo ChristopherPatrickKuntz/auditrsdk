@@ -256,3 +256,126 @@ describe('paid POST flow', () => {
     ).rejects.toThrow(SignerError);
   });
 });
+
+describe('facilitator.trial', () => {
+  it('requires label and ownerContact', async () => {
+    const client = new Auditr({ signer: noopSigner() });
+    await expect(
+      client.facilitator.trial({} as never),
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      client.facilitator.trial({ label: 'x' } as never),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('returns a parsed FacilitatorKey', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          key_id: 'abc12345',
+          tier: 'trial',
+          monthly_settle_quota: 100,
+          paid_through_at: null,
+          token: 'auditr_pub_abc12345_secretsecretsecretsecretsecretsecretsec',
+          facilitator_url: 'https://facilitator.auditr.xyz',
+          integration_docs: 'https://auditr.xyz/faq#facilitator-api',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    const key = await client.facilitator.trial({
+      label: 'my bot',
+      ownerContact: 'me@example.com',
+    });
+    expect(key.keyId).toBe('abc12345');
+    expect(key.tier).toBe('trial');
+    expect(key.monthlySettleQuota).toBe(100);
+    expect(key.paidThroughAt).toBeNull();
+    expect(key.token).toContain('auditr_pub_');
+    expect(key.facilitatorUrl).toBe('https://facilitator.auditr.xyz');
+    // POST body should serialize ownerContact -> owner_contact
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const call = fetchImpl.mock.calls[0]!;
+    expect(call[0]).toMatch(/\/api\/facilitator\/trial$/);
+    const sent = JSON.parse(call[1].body as string);
+    expect(sent.owner_contact).toBe('me@example.com');
+    expect(sent.networks_csv).toBe('*');
+  });
+
+  it('rejects 4xx errors as HttpError', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response('rate limited', { status: 429 }),
+    );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    await expect(
+      client.facilitator.trial({ label: 'x', ownerContact: 'me@example.com' }),
+    ).rejects.toThrow(HttpError);
+  });
+});
+
+describe('facilitator.signup', () => {
+  it('drives the x402 flow on the paid endpoint', async () => {
+    const challengeBody = JSON.stringify({
+      x402Version: 2,
+      accepts: [
+        {
+          scheme: 'exact',
+          network: 'eip155:8453',
+          asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          amount: '10000000',
+          payTo: '0xB03E5421f8588ea7C616f3E164461137E2a132E0',
+          maxTimeoutSeconds: 300,
+          extra: { name: 'USD Coin', version: '2' },
+        },
+      ],
+    });
+    const successBody = JSON.stringify({
+      key_id: 'def67890',
+      tier: 'basic',
+      monthly_settle_quota: 1000,
+      paid_through_at: '2026-06-28T00:00:00+00:00',
+      token: 'auditr_pub_def67890_secretsecretsecretsecretsecretsecretse',
+      facilitator_url: 'https://facilitator.auditr.xyz',
+      integration_docs: 'https://auditr.xyz/faq#facilitator-api',
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(challengeBody, {
+          status: 402,
+          headers: {
+            'content-type': 'application/json',
+            'payment-required': Buffer.from(challengeBody).toString('base64'),
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(successBody, {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    const key = await client.facilitator.signup('basic', {
+      label: 'Acme bot',
+      ownerContact: 'ops@acme.io',
+    });
+    expect(key.tier).toBe('basic');
+    expect(key.monthlySettleQuota).toBe(1000);
+    expect(key.paidThroughAt).toBe('2026-06-28T00:00:00+00:00');
+    // Two calls: unsigned challenge + signed retry.
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const retryHeaders = fetchImpl.mock.calls[1]![1].headers as Record<string, string>;
+    expect(retryHeaders['payment-signature']).toBe('base64.payment-signature');
+  });
+});
+
+describe('facilitator.renew', () => {
+  it('requires keyId', async () => {
+    const client = new Auditr({ signer: noopSigner() });
+    await expect(
+      client.facilitator.renew('pro', {} as never),
+    ).rejects.toThrow(ValidationError);
+  });
+});

@@ -5,9 +5,18 @@
  * response; treat these as defaults for type narrowing and quoting.
  */
 
-import type { AuditTier, MonitoringTier, Chain } from './types.js';
+import type { AuditTier, MonitoringTier, Chain, FacilitatorTier } from './types.js';
 
 export const DEFAULT_BASE_URL = 'https://api.auditr.xyz';
+
+/**
+ * Public URL for the Auditr-hosted x402 facilitator. Use this as the
+ * `url` for `HTTPFacilitatorClient` (or its equivalent in other
+ * languages). Verify and settle requests must be sent with a Bearer
+ * token (mint one via `auditr.facilitator.trial()` or
+ * `auditr.facilitator.signup()`).
+ */
+export const DEFAULT_FACILITATOR_URL = 'https://facilitator.auditr.xyz';
 
 export const AUDIT_TIERS = {
   quick: { priceUsd: 1, label: 'Quick site scan' },
@@ -48,4 +57,60 @@ export const SUPPORTED_NETWORKS_CAIP2 = {
   optimism: 'eip155:10',
   polygon: 'eip155:137',
   bsc: 'eip155:56',
+} as const;
+
+/**
+ * Subscription catalog for the Auditr-hosted x402 facilitator at
+ * https://facilitator.auditr.xyz. Each paid tier renews for 30 days.
+ *
+ * `trial` is free with no expiry; mint via `auditr.facilitator.trial()`
+ * (the endpoint is unpaid but IP rate-limited). Paid tiers are minted
+ * by paying USDC via x402 on the matching signup endpoint.
+ *
+ * The audited public x402 contracts make per-settlement fees
+ * impossible (the destination is cryptographically bound in the
+ * buyer's signature), so this tier price is a flat subscription, not
+ * a take rate. There is no per-settlement fee on top.
+ *
+ * A `floorUsd` floor still applies to every settlement to prevent
+ * sub-cent dust attacks that would burn our native gas wallet.
+ */
+export const FACILITATOR_TIERS = {
+  trial: {
+    monthlyQuota: 100,
+    priceUsdPerMonth: 0,
+    label: 'Trial',
+    description: 'Free 100 settlements per month. No expiry. No SLA.',
+  },
+  basic: {
+    monthlyQuota: 1_000,
+    priceUsdPerMonth: 10,
+    label: 'Basic',
+    description: '1,000 settlements per month. Best-effort support.',
+  },
+  pro: {
+    monthlyQuota: 10_000,
+    priceUsdPerMonth: 50,
+    label: 'Pro',
+    description: '10,000 settlements per month. 24h response SLA.',
+  },
+  enterprise: {
+    monthlyQuota: 1_000_000,
+    priceUsdPerMonth: 500,
+    label: 'Enterprise',
+    description: '1,000,000 settlements per month. Same-day support, custom networks.',
+  },
+} as const satisfies Record<
+  Exclude<FacilitatorTier, 'unlimited'>,
+  { monthlyQuota: number; priceUsdPerMonth: number; label: string; description: string }
+>;
+
+/**
+ * Per-network minimum settle amount (in USD). Settlements below this
+ * floor are rejected by the facilitator with HTTP 400 because the
+ * facilitator's native-gas spend would exceed the payment value.
+ */
+export const FACILITATOR_FLOOR_USD = {
+  evm: 0.02,
+  solana: 0.005,
 } as const;

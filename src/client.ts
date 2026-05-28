@@ -17,7 +17,7 @@
  * ```
  */
 
-import { DEFAULT_BASE_URL } from './constants.js';
+import { DEFAULT_BASE_URL, DEFAULT_FACILITATOR_URL } from './constants.js';
 import { ValidationError, TimeoutError, SignerError, HttpError, PaymentRequiredError } from './errors.js';
 import {
   auditReportSchema,
@@ -37,6 +37,13 @@ import type {
   MonitoringTier,
   CreateMonitoringRequest,
   CreateMonitoringResponse,
+  FacilitatorAdminInfo,
+  FacilitatorKey,
+  FacilitatorRenewRequest,
+  FacilitatorRenewResponse,
+  FacilitatorSignupRequest,
+  FacilitatorSupportedKind,
+  PaidFacilitatorTier,
 } from './types.js';
 import {
   assertOk,
@@ -66,6 +73,13 @@ export class Auditr {
   /** Monitoring operations. See `monitoring.basic`, `monitoring.pro`, `monitoring.enterprise`. */
   public readonly monitoring: MonitoringApi;
 
+  /**
+   * Facilitator-API operations. Provision and renew Bearer tokens for
+   * the Auditr-hosted x402 facilitator at
+   * `https://facilitator.auditr.xyz`.
+   */
+  public readonly facilitator: FacilitatorApi;
+
   constructor(options: AuditrClientOptions) {
     if (!options || !options.signer) {
       throw new ValidationError(
@@ -88,6 +102,31 @@ export class Auditr {
 
     this.audits = new AuditsApi(this);
     this.monitoring = new MonitoringApi(this);
+    this.facilitator = new FacilitatorApi(this);
+  }
+
+  /** @internal */
+  async freePost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+    const url = `${this.baseUrl}${path}`;
+    const response = await this.fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+        'user-agent': this.userAgent,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    const raw = await readBodyTruncated(response);
+    if (!response.ok) {
+      throw new HttpError(response.status, raw, response.headers);
+    }
+    try {
+      return JSON.parse(raw) as T;
+    } catch (e) {
+      throw new ValidationError('Response body is not valid JSON', e);
+    }
   }
 
   /** @internal */
@@ -185,6 +224,32 @@ export class Auditr {
       return JSON.parse(body) as T;
     } catch (e) {
       throw new ValidationError('Response body is not valid JSON', e);
+    }
+  }
+
+  /**
+   * @internal
+   * Fetch an absolute URL (not a path under `baseUrl`) and return
+   * parsed JSON. Used by FacilitatorApi.supported and .adminInfo,
+   * which hit the facilitator host directly rather than auditr-api.
+   */
+  async externalGetJson(absoluteUrl: string, headers: Record<string, string> = {}): Promise<unknown> {
+    const response = await this.fetchImpl(absoluteUrl, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+        'user-agent': this.userAgent,
+        ...headers,
+      },
+    });
+    const body = await readBodyTruncated(response);
+    if (!response.ok) {
+      throw new HttpError(response.status, body, response.headers);
+    }
+    try {
+      return JSON.parse(body) as unknown;
+    } catch (e) {
+      throw new ValidationError('External response body is not valid JSON', e);
     }
   }
 
@@ -447,4 +512,227 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+/**
+ * Operations for the Auditr-hosted x402 facilitator at
+ * `https://facilitator.auditr.xyz`. Bot/agent fleets that want to
+ * run x402 (verify + settle) without operating their own facilitator
+ * provision a Bearer token here and point any x402 SDK
+ * (Coinbase AgentKit, x402-py, x402-ts) at our URL.
+ */
+class FacilitatorApi {
+  constructor(private readonly parent: Auditr) {}
+
+  /**
+   * Mint a free trial key. 100 settlements per month, no expiry, no
+   * payment required. IP-rate-limited on the server side; one or two
+   * trial keys per IP per day in normal operation.
+   *
+   * ```ts
+   * const key = await auditr.facilitator.trial({
+   *   label: 'my bot',
+   *   ownerContact: 'me@example.com',
+   * });
+   * // Send `key.token` as `Authorization: Bearer ...` to
+   * // `${key.facilitatorUrl}/verify` and `/settle`.
+   * ```
+   */
+  async trial(request: FacilitatorSignupRequest): Promise<FacilitatorKey> {
+    this.assertSignupRequest(request);
+    const raw = await this.parent.freePost<unknown>(
+      '/api/facilitator/trial',
+      {
+        label: request.label,
+        owner_contact: request.ownerContact,
+        networks_csv: request.networksCsv ?? '*',
+      },
+    );
+    return parseFacilitatorKey(raw);
+  }
+
+  /**
+   * Pay for a basic facilitator subscription. $10 USDC for 30 days.
+   * The SDK's configured `PaymentSigner` produces the EIP-3009 auth
+   * exactly the same way it does for audit payments.
+   *
+   * ```ts
+   * const key = await auditr.facilitator.signup('basic', {
+   *   label: 'Acme bot fleet',
+   *   ownerContact: 'ops@acme.io',
+   * });
+   * ```
+   *
+   * After lapse, the key silently falls back to the trial quota
+   * until renewed. Call `adminInfo` with the returned token to read
+   * remaining quota and `paidThroughAt`.
+   */
+  signup(
+    tier: PaidFacilitatorTier,
+    request: FacilitatorSignupRequest,
+  ): Promise<FacilitatorKey> {
+    this.assertSignupRequest(request);
+    return this.createSubscription(tier, {
+      label: request.label,
+      owner_contact: request.ownerContact,
+      networks_csv: request.networksCsv ?? '*',
+    });
+  }
+
+  /**
+   * Pay for another 30 days at the chosen tier. Paying a higher
+   * tier than the key's current stored tier upgrades it in the
+   * same call (e.g. `renew('pro', keyId)` on a `basic` key
+   * upgrades to pro AND extends paid_through by 30 days).
+   */
+  async renew(
+    tier: PaidFacilitatorTier,
+    request: FacilitatorRenewRequest,
+  ): Promise<FacilitatorRenewResponse> {
+    if (!request || !request.keyId) {
+      throw new ValidationError('renew requires { keyId }', null);
+    }
+    const { response } = await this.parent.paidPost<unknown>(
+      `/api/x402/facilitator/renew/${tier}`,
+      { key_id: request.keyId },
+    );
+    return parseRenewResponse(response);
+  }
+
+  /**
+   * List the (scheme, network) pairs the facilitator currently
+   * verifies and settles. No auth required; useful for discovery.
+   */
+  async supported(): Promise<FacilitatorSupportedKind[]> {
+    const parsed = (await this.parent.externalGetJson(
+      `${DEFAULT_FACILITATOR_URL}/supported`,
+    )) as { kinds?: unknown };
+    if (!parsed || !Array.isArray(parsed.kinds)) {
+      throw new ValidationError('/supported response missing `kinds` array', null);
+    }
+    return parsed.kinds as FacilitatorSupportedKind[];
+  }
+
+  /**
+   * Auth'd read of the facilitator's `/admin/info` for a given key.
+   * Returns the caller's tier, remaining quota, `paidThroughAt`,
+   * and other operator-facing state. Send the same Bearer token you
+   * use for /verify and /settle.
+   */
+  async adminInfo(token: string): Promise<FacilitatorAdminInfo> {
+    if (!token) {
+      throw new ValidationError('adminInfo requires a Bearer token', null);
+    }
+    const parsed = await this.parent.externalGetJson(
+      `${DEFAULT_FACILITATOR_URL}/admin/info`,
+      { authorization: `Bearer ${token}` },
+    );
+    return normalizeAdminInfo(parsed);
+  }
+
+  private assertSignupRequest(request: FacilitatorSignupRequest): void {
+    if (!request || typeof request !== 'object') {
+      throw new ValidationError('signup/trial requires a request object', null);
+    }
+    if (!request.label || typeof request.label !== 'string') {
+      throw new ValidationError('signup/trial requires `label`', null);
+    }
+    if (!request.ownerContact || typeof request.ownerContact !== 'string') {
+      throw new ValidationError('signup/trial requires `ownerContact`', null);
+    }
+  }
+
+  private async createSubscription(
+    tier: PaidFacilitatorTier,
+    body: Record<string, unknown>,
+  ): Promise<FacilitatorKey> {
+    const { response } = await this.parent.paidPost<unknown>(
+      `/api/x402/facilitator/signup/${tier}`,
+      body,
+    );
+    return parseFacilitatorKey(response);
+  }
+}
+
+function parseFacilitatorKey(raw: unknown): FacilitatorKey {
+  if (!raw || typeof raw !== 'object') {
+    throw new ValidationError('Facilitator key response is not an object', null);
+  }
+  const obj = raw as Record<string, unknown>;
+  const keyId = obj.key_id;
+  const tier = obj.tier;
+  const monthlySettleQuota = obj.monthly_settle_quota;
+  const paidThroughAt = (obj.paid_through_at ?? null) as string | null;
+  const token = obj.token;
+  const facilitatorUrl = (obj.facilitator_url ?? DEFAULT_FACILITATOR_URL) as string;
+  const integrationDocs = (obj.integration_docs ?? '') as string;
+  if (typeof keyId !== 'string' || typeof token !== 'string' || typeof tier !== 'string') {
+    throw new ValidationError('Facilitator key response missing required fields', null);
+  }
+  if (typeof monthlySettleQuota !== 'number') {
+    throw new ValidationError('Facilitator key response.monthly_settle_quota is not a number', null);
+  }
+  return {
+    keyId,
+    tier: tier as FacilitatorKey['tier'],
+    monthlySettleQuota,
+    paidThroughAt,
+    token,
+    facilitatorUrl,
+    integrationDocs,
+  };
+}
+
+function parseRenewResponse(raw: unknown): FacilitatorRenewResponse {
+  if (!raw || typeof raw !== 'object') {
+    throw new ValidationError('Renew response is not an object', null);
+  }
+  const obj = raw as Record<string, unknown>;
+  if (
+    typeof obj.key_id !== 'string' ||
+    typeof obj.tier !== 'string' ||
+    typeof obj.paid_through_at !== 'string'
+  ) {
+    throw new ValidationError('Renew response missing required fields', null);
+  }
+  return {
+    keyId: obj.key_id,
+    tier: obj.tier as FacilitatorRenewResponse['tier'],
+    paidThroughAt: obj.paid_through_at,
+  };
+}
+
+function normalizeAdminInfo(raw: unknown): FacilitatorAdminInfo {
+  if (!raw || typeof raw !== 'object') {
+    throw new ValidationError('/admin/info response is not an object', null);
+  }
+  const obj = raw as Record<string, unknown>;
+  const auth = obj.auth as Record<string, unknown> | undefined;
+  const fee = obj.fee_policy as Record<string, unknown> | undefined;
+  if (!auth || !fee) {
+    throw new ValidationError('/admin/info response missing auth or fee_policy', null);
+  }
+  return {
+    ok: true,
+    service: 'auditr_facilitator',
+    networkMode: obj.network_mode === 'testnet' ? 'testnet' : 'mainnet',
+    chains: Array.isArray(obj.chains) ? (obj.chains as string[]) : [],
+    feePolicy: {
+      evmPct: Number(fee.evm_pct ?? 0),
+      evmFloorUsd: Number(fee.evm_floor_usd ?? 0),
+      svmPct: Number(fee.svm_pct ?? 0),
+      svmFloorUsd: Number(fee.svm_floor_usd ?? 0),
+      extractionWired: Boolean(fee.extraction_wired ?? false),
+    },
+    auth: {
+      keyId: String(auth.key_id ?? ''),
+      label: String(auth.label ?? ''),
+      tier: (auth.tier ?? 'trial') as FacilitatorAdminInfo['auth']['tier'],
+      effectiveTier: (auth.effective_tier ?? 'trial') as FacilitatorAdminInfo['auth']['effectiveTier'],
+      paidThroughAt: (auth.paid_through_at ?? null) as string | null,
+      monthlySettleQuota: Number(auth.monthly_settle_quota ?? 0),
+      monthlySettleUsed: Number(auth.monthly_settle_used ?? 0),
+      monthlyPeriodStart: String(auth.monthly_period_start ?? ''),
+    },
+  };
 }
