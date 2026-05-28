@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@auditrxyz/sdk.svg)](https://www.npmjs.com/package/@auditrxyz/sdk)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![tests](https://github.com/auditrxyz/sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/auditrxyz/sdk/actions/workflows/ci.yml)
+[![tests](https://github.com/ChristopherPatrickKuntz/auditrsdk/actions/workflows/ci.yml/badge.svg)](https://github.com/ChristopherPatrickKuntz/auditrsdk/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/@auditrxyz/sdk.svg)](https://nodejs.org)
 
 TypeScript SDK for the [Auditr](https://auditr.xyz) x402 API. Submit

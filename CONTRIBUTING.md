@@ -20,7 +20,7 @@ that keep it small are welcomed.
 ## Local development
 
 ```bash
-git clone https://github.com/auditrxyz/sdk.git
+git clone https://github.com/ChristopherPatrickKuntz/auditrsdk.git
 cd sdk
 npm install
 npm run typecheck

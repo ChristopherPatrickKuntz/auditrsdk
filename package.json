@@ -7,10 +7,10 @@
   "homepage": "https://auditr.xyz",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/auditrxyz/sdk.git"
+    "url": "git+https://github.com/ChristopherPatrickKuntz/auditrsdk.git"
   },
   "bugs": {
-    "url": "https://github.com/auditrxyz/sdk/issues"
+    "url": "https://github.com/ChristopherPatrickKuntz/auditrsdk/issues"
   },
   "keywords": [
     "auditr",
