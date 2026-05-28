@@ -173,7 +173,7 @@ describe('paid POST flow', () => {
       x402Version: 2,
       resource: { url: 'https://api.example.com/api/x402/monitoring/pro' },
       accepts: [
-        { scheme: 'exact', network: 'eip155:8453', payTo: '0x0', price: '25.00' },
+        { scheme: 'exact', network: 'eip155:8453', payTo: '0x0', amount: '25000000' },
       ],
     };
     const settled = {

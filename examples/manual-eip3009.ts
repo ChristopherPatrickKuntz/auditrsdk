@@ -39,24 +39,38 @@ class Eip3009Signer implements PaymentSigner {
 
     const chainId = parseEip155ChainId(accept.network);
     const verifyingContract = accept.asset as `0x${string}`;
+    // accept.amount is already in atomic USDC units (six decimals).
+    // BigInt(accept.amount) is the value field the EIP-3009
+    // authorization expects directly.
+    const value = BigInt(accept.amount);
 
     const validAfter = 0n;
-    const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const validityWindow = Math.min(accept.maxTimeoutSeconds ?? 3600, 3600);
+    const validBefore = BigInt(Math.floor(Date.now() / 1000) + validityWindow);
     const nonce = `0x${cryptoRandomHex(64)}` as `0x${string}`;
 
     const message = {
       from: this.wallet.account.address,
       to: accept.payTo,
-      value: parseUsdc(accept.price),
+      value,
       validAfter,
       validBefore,
       nonce,
     };
 
+    // EIP-712 domain depends on the asset contract. Canonical USDC
+    // uses { name: "USD Coin", version: "2" } on Ethereum, Base,
+    // Arbitrum, and Optimism; Polygon's bridged USDC uses
+    // "USD Coin (PoS)". Read from accept.extra when the facilitator
+    // populated it, otherwise fall back to the canonical pair.
+    const extra = (accept.extra ?? {}) as { name?: string; version?: string };
+    const domainName = extra.name ?? 'USD Coin';
+    const domainVersion = extra.version ?? '2';
+
     const signature = await this.wallet.signTypedData({
       domain: {
-        name: 'USD Coin',
-        version: '2',
+        name: domainName,
+        version: domainVersion,
         chainId,
         verifyingContract,
       },
@@ -100,14 +114,6 @@ function parseEip155ChainId(network: string): number {
     throw new Error(`Not an EVM network: ${network}`);
   }
   return Number(network.slice('eip155:'.length));
-}
-
-function parseUsdc(priceString: string): bigint {
-  // USDC has six decimals on every supported chain we settle on.
-  const cleaned = priceString.replace(/^\$?/, '').trim();
-  const [whole, fraction = ''] = cleaned.split('.');
-  const padded = (fraction + '000000').slice(0, 6);
-  return BigInt(whole + padded);
 }
 
 function cryptoRandomHex(chars: number): string {
