@@ -212,3 +212,92 @@ export interface WaitForCompletionOptions {
    */
   onStatus?(status: AuditStatus): void;
 }
+
+export type MonitoringTargetKind = 'contract' | 'token' | 'wallet';
+
+/**
+ * Allowed webhook destinations for monitoring alerts. The backend
+ * enforces a strict allowlist on the URL host and path to prevent
+ * the alert pipeline from being used as an SSRF reflector. Only
+ * Discord and Slack incoming webhooks are accepted; other targets
+ * are rejected with a 400 at subscription creation time.
+ */
+export type SupportedWebhookHost =
+  | 'discord.com'
+  | 'discordapp.com'
+  | 'hooks.slack.com';
+
+export interface CreateMonitoringRequest {
+  /**
+   * The wallet that owns the subscription. Alerts route to this
+   * wallet's linked Telegram account when one exists, and the
+   * subscription is gated to this wallet on read and delete.
+   */
+  userWallet: string;
+  /**
+   * Address of the on chain target to monitor. EVM addresses are
+   * `0x` prefixed 40 char hex; Solana addresses are base58.
+   */
+  contractAddress: string;
+  /**
+   * Chain the target lives on. Must be in the platform's
+   * supported set.
+   */
+  chain: Chain;
+  /**
+   * What kind of address `contractAddress` is. Defaults to
+   * `contract`. Token and wallet targets use the same monitoring
+   * pipeline with different event filters.
+   */
+  targetKind?: MonitoringTargetKind;
+  /**
+   * Email to receive alerts in addition to (or instead of) the
+   * Telegram channel. The Pro and Enterprise tiers include email.
+   */
+  notifyEmail?: string;
+  /**
+   * HTTPS webhook for alert delivery. Must be a canonical Discord
+   * (`https://discord.com/api/webhooks/...`) or Slack
+   * (`https://hooks.slack.com/services/...`) endpoint. Other hosts
+   * are rejected by the API.
+   */
+  webhookUrl?: string;
+  /**
+   * Telegram chat id to DM. If the request originates from the
+   * Mini App context the SDK transparently uses the verified id
+   * from `X-Telegram-Init-Data`; otherwise pass it explicitly.
+   */
+  telegramChatId?: number;
+}
+
+export interface MonitoringSubscription {
+  id: string;
+  userWallet: string;
+  targetAddress: string;
+  targetKind: MonitoringTargetKind;
+  chain: Chain;
+  tier: MonitoringTier;
+  intervalMinutes: number;
+  delivery: string[];
+  active: boolean;
+  paidThroughTs?: string;
+  nextRunAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  notifyEmail?: string;
+  webhookUrl?: string;
+}
+
+export interface CreateMonitoringResponse {
+  subscription: MonitoringSubscription;
+  /**
+   * Relative URL that lists all subscriptions for the wallet.
+   * Useful for the agent's own bookkeeping; the platform also
+   * exposes per subscription routes.
+   */
+  statusUrl: string;
+  /**
+   * x402 settlement details when the facilitator returned them.
+   */
+  settlement?: PaymentSettlement;
+}

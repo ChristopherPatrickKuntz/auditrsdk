@@ -168,6 +168,73 @@ describe('paid POST flow', () => {
     expect(result.tier).toBe('web3');
   });
 
+  it('creates a monitoring subscription end to end', async () => {
+    const challenge = {
+      x402Version: 2,
+      resource: { url: 'https://api.example.com/api/x402/monitoring/pro' },
+      accepts: [
+        { scheme: 'exact', network: 'eip155:8453', payTo: '0x0', price: '25.00' },
+      ],
+    };
+    const settled = {
+      subscription: {
+        id: 'sub-1',
+        user_wallet: '0xcafe',
+        target_address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        target_kind: 'contract',
+        chain: 'ethereum',
+        tier: 'pro',
+        interval_minutes: 60,
+        delivery: ['telegram', 'email'],
+        active: false,
+        paid_through_ts: null,
+        next_run_at: null,
+        created_at: '2026-05-28T01:00:00.000Z',
+        updated_at: '2026-05-28T01:00:00.000Z',
+        notify_email: null,
+        webhook_url: null,
+      },
+      status_url: '/api/monitoring/subscriptions?wallet=0xcafe',
+    };
+    const fetchImpl = vi
+      .fn<Parameters<typeof fetch>, Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response('payment required', {
+          status: 402,
+          headers: {
+            'payment-required': Buffer.from(JSON.stringify(challenge)).toString('base64'),
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(settled), { status: 201 }),
+      );
+    const client = new Auditr({
+      signer: noopSigner(),
+      fetch: fetchImpl,
+      baseUrl: 'https://api.example.com',
+    });
+    const result = await client.monitoring.pro({
+      userWallet: '0xcafe',
+      contractAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+      chain: 'ethereum',
+    });
+    expect(result.subscription.tier).toBe('pro');
+    expect(result.subscription.targetKind).toBe('contract');
+    expect(result.statusUrl).toContain('wallet=0xcafe');
+  });
+
+  it('rejects monitoring without required fields', async () => {
+    const client = new Auditr({ signer: noopSigner() });
+    await expect(
+      client.monitoring.basic({
+        userWallet: '',
+        contractAddress: '0x0',
+        chain: 'ethereum',
+      }),
+    ).rejects.toThrow(ValidationError);
+  });
+
   it('wraps signer failures in SignerError', async () => {
     const challenge = {
       x402Version: 2,

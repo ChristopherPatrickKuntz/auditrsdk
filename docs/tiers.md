@@ -37,8 +37,43 @@ pause state changes.
 | `pro`        | $25 USDC          | 5         | Every 1 h     | Telegram, email                         |
 | `enterprise` | $50 USDC          | Unlimited | Every 15 min  | Telegram, email, Discord, Slack         |
 
-This SDK release covers audits only. A future minor will add
-`auditr.monitoring.<tier>()` methods.
+Invoke with:
+
+```ts
+await auditr.monitoring.basic({
+  userWallet: '0xYourAgentWallet',
+  contractAddress: '0xContractToWatch',
+  chain: 'base',
+});
+
+await auditr.monitoring.pro({
+  userWallet: '0xYourAgentWallet',
+  contractAddress: '0xContractToWatch',
+  chain: 'base',
+  notifyEmail: 'alerts@example.com',
+});
+
+await auditr.monitoring.enterprise({
+  userWallet: '0xYourAgentWallet',
+  contractAddress: '0xContractToWatch',
+  chain: 'base',
+  notifyEmail: 'alerts@example.com',
+  webhookUrl: 'https://discord.com/api/webhooks/...',
+});
+```
+
+### Webhook host allowlist
+
+The platform rejects `webhookUrl` values that do not match the
+canonical Discord or Slack endpoint shape. Accepted hosts:
+
+- `https://discord.com/api/webhooks/...`
+- `https://discordapp.com/api/webhooks/...`
+- `https://hooks.slack.com/services/...`
+
+Other hosts return a 400 at subscription creation time. The
+allowlist exists to keep the alert pipeline from being used as an
+SSRF reflector against internal infrastructure.
 
 ## Network coverage
 

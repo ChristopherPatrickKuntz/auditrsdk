@@ -19,7 +19,11 @@
 
 import { DEFAULT_BASE_URL } from './constants.js';
 import { ValidationError, TimeoutError, SignerError, HttpError, PaymentRequiredError } from './errors.js';
-import { auditReportSchema, createAuditResponseSchema } from './schema/index.js';
+import {
+  auditReportSchema,
+  createAuditResponseSchema,
+  createMonitoringResponseSchema,
+} from './schema/index.js';
 import type {
   AuditrClientOptions,
   AuditTier,
@@ -30,13 +34,18 @@ import type {
   WaitForCompletionOptions,
   PaymentSigner,
   PaymentRequired,
+  MonitoringTier,
+  CreateMonitoringRequest,
+  CreateMonitoringResponse,
 } from './types.js';
 import {
   assertOk,
   buildUserAgent,
-  parsePaymentSettlement,
+  parsePaymentSettlementHeader as parsePaymentSettlementHeaderHeader,
   readBodyTruncated,
 } from './http.js';
+
+type ParsedSettlement = ReturnType<typeof parsePaymentSettlementHeaderHeader>;
 
 const TERMINAL_STATUSES: ReadonlySet<AuditStatus> = new Set([
   'completed',
@@ -53,6 +62,9 @@ export class Auditr {
 
   /** Audit operations. See `audits.quick`, `audits.standard`, `audits.web3`. */
   public readonly audits: AuditsApi;
+
+  /** Monitoring operations. See `monitoring.basic`, `monitoring.pro`, `monitoring.enterprise`. */
+  public readonly monitoring: MonitoringApi;
 
   constructor(options: AuditrClientOptions) {
     if (!options || !options.signer) {
@@ -75,10 +87,11 @@ export class Auditr {
     this.userAgent = buildUserAgent(options.userAgent);
 
     this.audits = new AuditsApi(this);
+    this.monitoring = new MonitoringApi(this);
   }
 
   /** @internal */
-  async paidPost<T>(path: string, body: unknown): Promise<{ response: T; settlement?: ReturnType<typeof parsePaymentSettlement> }> {
+  async paidPost<T>(path: string, body: unknown): Promise<{ response: T; settlement?: ReturnType<typeof parsePaymentSettlementHeader> }> {
     const url = `${this.baseUrl}${path}`;
     const baseHeaders: Record<string, string> = {
       'content-type': 'application/json',
@@ -134,7 +147,7 @@ export class Auditr {
     const retryBody = await readBodyTruncated(retry);
     assertOk(retry, retryBody);
 
-    const settlement = parsePaymentSettlement(
+    const settlement = parsePaymentSettlementHeader(
       retry.headers.get('payment-response'),
     );
 
@@ -269,6 +282,83 @@ class AuditsApi {
     }
     return parsed;
   }
+}
+
+class MonitoringApi {
+  constructor(private readonly parent: Auditr) {}
+
+  /** Create + pay for a basic monitoring subscription. $10 USDC per month. */
+  basic(request: CreateMonitoringRequest): Promise<CreateMonitoringResponse> {
+    return this.create('basic', request);
+  }
+
+  /** Create + pay for a pro monitoring subscription. $25 USDC per month. */
+  pro(request: CreateMonitoringRequest): Promise<CreateMonitoringResponse> {
+    return this.create('pro', request);
+  }
+
+  /** Create + pay for an enterprise monitoring subscription. $50 USDC per month. */
+  enterprise(request: CreateMonitoringRequest): Promise<CreateMonitoringResponse> {
+    return this.create('enterprise', request);
+  }
+
+  private async create(
+    tier: MonitoringTier,
+    request: CreateMonitoringRequest,
+  ): Promise<CreateMonitoringResponse> {
+    if (!request.userWallet || !request.contractAddress || !request.chain) {
+      throw new ValidationError(
+        'monitoring requires userWallet, contractAddress, and chain',
+        null,
+      );
+    }
+    const body = {
+      user_wallet: request.userWallet,
+      contract_address: request.contractAddress,
+      chain: request.chain,
+      target_kind: request.targetKind ?? 'contract',
+      notify_email: request.notifyEmail,
+      webhook_url: request.webhookUrl,
+      telegram_chat_id: request.telegramChatId,
+    };
+    const { response, settlement } = await this.parent.paidPost<unknown>(
+      `/api/x402/monitoring/${tier}`,
+      body,
+    );
+    return parseCreateMonitoringResponse(response, settlement);
+  }
+}
+
+function parseCreateMonitoringResponse(
+  raw: unknown,
+  settlement: ParsedSettlement,
+): CreateMonitoringResponse {
+  const result = createMonitoringResponseSchema.safeParse(raw);
+  if (!result.success) {
+    throw new ValidationError('Create monitoring response failed schema validation', result.error);
+  }
+  const sub = result.data.subscription;
+  return {
+    subscription: {
+      id: sub.id,
+      userWallet: sub.user_wallet,
+      targetAddress: sub.target_address,
+      targetKind: sub.target_kind,
+      chain: sub.chain as CreateMonitoringResponse['subscription']['chain'],
+      tier: sub.tier,
+      intervalMinutes: sub.interval_minutes,
+      delivery: sub.delivery,
+      active: sub.active,
+      paidThroughTs: sub.paid_through_ts ?? undefined,
+      nextRunAt: sub.next_run_at ?? undefined,
+      createdAt: sub.created_at,
+      updatedAt: sub.updated_at,
+      notifyEmail: sub.notify_email ?? undefined,
+      webhookUrl: sub.webhook_url ?? undefined,
+    },
+    statusUrl: result.data.status_url,
+    settlement,
+  };
 }
 
 function parseCreateAuditResponse(

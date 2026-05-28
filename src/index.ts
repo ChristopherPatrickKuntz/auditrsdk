@@ -29,14 +29,20 @@ export type {
   PaymentSettlement,
   AuditTier,
   MonitoringTier,
+  MonitoringTargetKind,
   CreateAuditRequest,
   CreateAuditResponse,
+  CreateMonitoringRequest,
+  CreateMonitoringResponse,
+  MonitoringSubscription,
   AuditStatus,
   AuditReport,
   Finding,
   Severity,
   Chain,
   PaymentToken,
+  ScanType,
+  SupportedWebhookHost,
 } from './types.js';
 
 export {

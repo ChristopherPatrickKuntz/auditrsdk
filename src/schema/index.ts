@@ -70,5 +70,33 @@ export const createAuditResponseSchema = z.object({
   status_url: z.string(),
 });
 
+export const monitoringTargetKindSchema = z.enum(['contract', 'token', 'wallet']);
+
+export const monitoringTierSchema = z.enum(['basic', 'pro', 'enterprise']);
+
+export const monitoringSubscriptionSchema = z.object({
+  id: z.string(),
+  user_wallet: z.string(),
+  target_address: z.string(),
+  target_kind: monitoringTargetKindSchema,
+  chain: z.string(),
+  tier: monitoringTierSchema,
+  interval_minutes: z.number(),
+  delivery: z.array(z.string()),
+  active: z.boolean(),
+  paid_through_ts: z.string().nullable().optional(),
+  next_run_at: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  notify_email: z.string().nullable().optional(),
+  webhook_url: z.string().nullable().optional(),
+});
+
+export const createMonitoringResponseSchema = z.object({
+  subscription: monitoringSubscriptionSchema,
+  status_url: z.string(),
+});
+
 export type AuditReportInput = z.infer<typeof auditReportSchema>;
 export type CreateAuditResponseInput = z.infer<typeof createAuditResponseSchema>;
+export type CreateMonitoringResponseInput = z.infer<typeof createMonitoringResponseSchema>;

@@ -9,6 +9,7 @@ retry policy, caching, or persistence.
 | `basic.ts`                 | The shortest possible end to end run with a stub signer   |
 | `coinbase-agent-kit.ts`    | Adapter that wraps Coinbase Agent Kit as a PaymentSigner  |
 | `manual-eip3009.ts`        | Hand built EIP-3009 signer using a viem compatible wallet |
+| `monitoring.ts`            | Subscribe to on chain monitoring with Discord delivery    |
 
 Run with `tsx` or `ts-node`:
 
