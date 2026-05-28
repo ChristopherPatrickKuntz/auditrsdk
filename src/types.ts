@@ -13,19 +13,11 @@ export type AuditTier = 'quick' | 'standard' | 'web3';
 export type MonitoringTier = 'basic' | 'pro' | 'enterprise';
 
 /**
- * Subscription tier for the Auditr-hosted x402 facilitator
- * (https://facilitator.auditr.xyz). `trial` is free and minted via
- * `auditr.facilitator.trial()`. `basic`, `pro`, and `enterprise` are
- * minted by paying USDC via x402 on the matching signup endpoint.
- *
- * `unlimited` is internal-only and not mintable through the public
- * SDK; included in the type for completeness when inspecting
- * server-returned key rows.
+ * Network family for wallet-signature identity binding on the
+ * facilitator trial endpoint. `evm` uses EIP-191 `personal_sign`;
+ * `svm` uses Solana ed25519 `signMessage`.
  */
-export type FacilitatorTier = 'trial' | 'basic' | 'pro' | 'enterprise' | 'unlimited';
-
-/** Paid (x402-gated) facilitator tiers. */
-export type PaidFacilitatorTier = Exclude<FacilitatorTier, 'trial' | 'unlimited'>;
+export type FacilitatorWalletNetwork = 'evm' | 'svm';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
@@ -348,135 +340,185 @@ export interface CreateMonitoringResponse {
 }
 
 /**
- * Request body for `POST /api/facilitator/trial` (free) and
- * `POST /api/x402/facilitator/signup/<tier>` (paid).
+ * Request body for `POST /api/facilitator/trial`. The trial mints a
+ * Bearer token bound to a wallet you control; the wallet signature
+ * is verified server-side. The free 25 settles/month are then keyed
+ * on this wallet so no one else can claim the address and burn the
+ * quota.
+ *
+ * To produce `signature`, sign the canonical message (verbatim,
+ * including newlines and the trailing newline):
+ *
+ *     Auditr Facilitator Trial Authorization
+ *     Wallet:    <walletAddress>
+ *     Network:   <walletNetwork>
+ *     Timestamp: <timestamp>
+ *     Nonce:     <nonce>
+ *
+ * Use EIP-191 `personal_sign` for EVM, ed25519 `signMessage` for
+ * Solana. `timestamp` must be within ±5 minutes of server clock.
  */
-export interface FacilitatorSignupRequest {
+export interface FacilitatorTrialRequest {
   /**
-   * Display name shown in our admin UI for support and revoke flows.
-   * Not a secret. Keep it short and recognizable (e.g. "Acme bot
-   * fleet" or "alice's research agent").
+   * Display name for our admin UI. Not a secret. Keep it short and
+   * recognizable (e.g. "Acme bot fleet").
    */
   label: string;
 
   /**
-   * Off-band contact (email, Telegram handle, URL) used if we ever
-   * need to reach you (revoke compromised key, upgrade pricing,
-   * incident notification). Not displayed to other consumers.
+   * Off-band contact (email, Telegram, URL) used if we ever need to
+   * reach you. Not displayed to other consumers.
    */
   ownerContact: string;
 
   /**
-   * Comma-separated list of CAIP-2 network ids the key may settle
-   * on, or `'*'` for any network the facilitator currently
-   * advertises. Defaults to `'*'`.
+   * The wallet you control. EVM: 0x-prefixed 40-hex address. Solana:
+   * base58 ed25519 pubkey.
+   */
+  walletAddress: string;
+
+  /**
+   * Which signing scheme to verify against — and, importantly, which
+   * billing posture the resulting key gets:
+   *
+   * - `'svm'`: 25 free settlements per month, Solana-only. The
+   *   recommended choice for new consumers.
+   * - `'evm'`: zero free settlements. Mint an EVM-bound key only if
+   *   you intend to `topup()` and settle on Base from a prepaid
+   *   balance; the free Solana quota is not transferable.
+   */
+  walletNetwork: FacilitatorWalletNetwork;
+
+  /** ISO-8601 UTC; must be within ±5 minutes of the server clock. */
+  timestamp: string;
+
+  /** 16 bytes of randomness, hex-encoded (32 chars). One-shot. */
+  nonce: string;
+
+  /**
+   * The signature over the canonical message. EVM: 65-byte hex
+   * (`0x...`). Solana: 64-byte base58 or base64.
+   */
+  signature: string;
+
+  /**
+   * Optional comma-separated CAIP-2 network allowlist for this key.
+   * Defaults to `'*'` (any network the facilitator advertises).
    */
   networksCsv?: string;
 }
 
 /**
- * Request body for `POST /api/x402/facilitator/renew/<tier>`. Pays
- * the matching tier's price; pushes `paidThroughAt` forward by 30
- * days. Paying a higher-tier renewal upgrades the stored tier in the
- * same call.
+ * Request body for `POST /api/x402/facilitator/topup`. The body
+ * carries only the key to credit; the payment itself is handled by
+ * the SDK's x402 flow.
  */
-export interface FacilitatorRenewRequest {
-  /** The `keyId` returned by a prior `signup()` or `trial()` call. */
+export interface FacilitatorTopupRequest {
+  /** The keyId from a prior `trial()` response. */
   keyId: string;
 }
 
 /**
- * Response from `POST /api/x402/facilitator/signup/<tier>`,
- * `POST /api/facilitator/trial`, and (on the body of) the renew
- * endpoints. The full Bearer `token` is returned ONCE; persist it
- * securely on the caller side. Auditr cannot recover it.
+ * Response from `POST /api/facilitator/trial`. The full Bearer
+ * `token` is returned ONCE on first mint; if a key already exists
+ * for the same wallet the response will set `alreadyExisted: true`
+ * and OMIT the `token`. Auditr does not reissue lost tokens; revoke
+ * and re-mint with a different wallet if you lose access.
  */
 export interface FacilitatorKey {
-  /**
-   * Short public identifier (8 hex chars). Use this in log lines
-   * and as the `keyId` parameter for renew calls.
-   */
+  /** Short public identifier (8 hex chars). Use as `keyId` later. */
   keyId: string;
 
-  /** Current subscription tier. */
-  tier: FacilitatorTier;
+  /** Wallet bound to this key's free-tier quota. */
+  walletAddress: string | null;
+
+  /** Signing scheme the wallet uses. */
+  walletNetwork: FacilitatorWalletNetwork | null;
+
+  /** Free settlements per calendar month under the trial. */
+  freeSettlesPerMonth: number;
+
+  /** Current prepaid balance in USDC base units (6 decimals). */
+  paidBalanceAtomicUsdc: number;
 
   /**
-   * Number of settlements allowed per calendar month under the
-   * current tier. `-1` means unlimited.
+   * `true` when this wallet already had a key (the trial endpoint is
+   * idempotent on wallet). When `true`, `token` is NOT included.
    */
-  monthlySettleQuota: number;
+  alreadyExisted: boolean;
 
   /**
-   * ISO-8601 timestamp after which the paid subscription lapses
-   * and the key falls back to the trial quota (100/mo). `null` for
-   * trial keys.
+   * The full Bearer token, returned ONCE. Send as
+   * `Authorization: Bearer <token>` to /verify and /settle.
    */
-  paidThroughAt: string | null;
+  token?: string;
 
-  /**
-   * The full Bearer token: `auditr_pub_<keyId>_<43chars>`. Send as
-   * `Authorization: Bearer <token>` on calls to
-   * `https://facilitator.auditr.xyz/verify` and `/settle`. Never
-   * returned again after this response.
-   */
-  token: string;
-
-  /**
-   * Public URL of the facilitator the token authenticates against.
-   * Defaults to `https://facilitator.auditr.xyz`.
-   */
+  /** Public URL of the facilitator. */
   facilitatorUrl: string;
 
-  /**
-   * URL of the FAQ section that documents integration. Deep-linked
-   * so the response is itself the docs.
-   */
+  /** Deep-link to the FAQ integration section. */
   integrationDocs: string;
 }
 
 /**
- * Response from the renew endpoints. Same shape minus the `token`
- * (the existing token is unchanged on renew).
+ * Response from `POST /api/x402/facilitator/topup`.
  */
-export interface FacilitatorRenewResponse {
+export interface FacilitatorTopupResponse {
   keyId: string;
-  tier: FacilitatorTier;
-  paidThroughAt: string;
+
+  /** Settlement tx hash used as the idempotency key. */
+  txHash: string;
+
+  /** `true` on first credit; `false` if this tx was already credited. */
+  credited: boolean;
+
+  /** Post-credit balance in USDC base units. */
+  paidBalanceAtomicUsdc: number;
+
+  /** Convenience: same as above divided by 10^6. */
+  paidBalanceUsd: number;
+
+  facilitatorUrl: string;
+  integrationDocs: string;
 }
 
 /**
  * `GET /admin/info` response (auth-required, Bearer token of the key
- * itself). Useful for checking remaining quota and paid_through
- * before a long run.
+ * itself). Use to read remaining balance + free quota before a long
+ * run.
  */
 export interface FacilitatorAdminInfo {
   ok: true;
   service: 'auditr_facilitator';
   networkMode: 'mainnet' | 'testnet';
   chains: string[];
-  feePolicy: {
-    evmPct: number;
-    evmFloorUsd: number;
-    svmPct: number;
-    svmFloorUsd: number;
-    extractionWired: boolean;
+  billing: {
+    /** 25 by default. */
+    freeQuotaPerMonth: number;
+    /** $10 by default. */
+    topupAmountUsd: number;
+    /** $10 = 10_000_000. */
+    topupAmountAtomicUsdc: number;
+    /** Per-settle buffer in USDC base units (default 500 = $0.0005). */
+    gasBufferAtomicUsdc: number;
+    /** Static breaker ceiling in USDC base units (default 100_000 = $0.10). */
+    gasBreakerAtomicUsdc: number;
   };
   auth: {
     keyId: string;
     label: string;
-    tier: FacilitatorTier;
-    effectiveTier: FacilitatorTier;
-    paidThroughAt: string | null;
-    monthlySettleQuota: number;
-    monthlySettleUsed: number;
-    monthlyPeriodStart: string;
+    isInternal: boolean;
+    walletAddress: string | null;
+    walletNetwork: FacilitatorWalletNetwork | null;
+    paidBalanceAtomicUsdc: number;
+    freeSettlesUsed: number;
+    freeSettlesRemaining: number;
+    freePeriodStart: string;
   };
 }
 
 /**
- * `GET /supported` response (public). Lists every (scheme, network)
- * combination the facilitator can verify and settle.
+ * `GET /supported` response (public).
  */
 export interface FacilitatorSupportedKind {
   scheme: string;

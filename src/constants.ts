@@ -5,7 +5,7 @@
  * response; treat these as defaults for type narrowing and quoting.
  */
 
-import type { AuditTier, MonitoringTier, Chain, FacilitatorTier } from './types.js';
+import type { AuditTier, MonitoringTier, Chain } from './types.js';
 
 export const DEFAULT_BASE_URL = 'https://api.auditr.xyz';
 
@@ -13,8 +13,8 @@ export const DEFAULT_BASE_URL = 'https://api.auditr.xyz';
  * Public URL for the Auditr-hosted x402 facilitator. Use this as the
  * `url` for `HTTPFacilitatorClient` (or its equivalent in other
  * languages). Verify and settle requests must be sent with a Bearer
- * token (mint one via `auditr.facilitator.trial()` or
- * `auditr.facilitator.signup()`).
+ * token (mint one via `auditr.facilitator.trial()`; refill the
+ * prepaid balance with `auditr.facilitator.topup()`).
  */
 export const DEFAULT_FACILITATOR_URL = 'https://facilitator.auditr.xyz';
 
@@ -60,57 +60,91 @@ export const SUPPORTED_NETWORKS_CAIP2 = {
 } as const;
 
 /**
- * Subscription catalog for the Auditr-hosted x402 facilitator at
- * https://facilitator.auditr.xyz. Each paid tier renews for 30 days.
+ * Pricing for the Auditr-hosted x402 facilitator at
+ * https://facilitator.auditr.xyz.
  *
- * `trial` is free with no expiry; mint via `auditr.facilitator.trial()`
- * (the endpoint is unpaid but IP rate-limited). Paid tiers are minted
- * by paying USDC via x402 on the matching signup endpoint.
- *
- * The audited public x402 contracts make per-settlement fees
- * impossible (the destination is cryptographically bound in the
- * buyer's signature), so this tier price is a flat subscription, not
- * a take rate. There is no per-settlement fee on top.
- *
- * A `floorUsd` floor still applies to every settlement to prevent
- * sub-cent dust attacks that would burn our native gas wallet.
+ * Pay-as-you-go: each settle debits the actual chain gas cost in
+ * USDC from the consumer's prepaid balance. No subscription, no
+ * markup. The free trial gives 25 Solana-only settles per month
+ * bound to a signed wallet (mint via `auditr.facilitator.trial`).
+ * `auditr.facilitator.topup` adds `topUpUsd` to the balance for
+ * `topUpAtomicUsdc` atomic credits.
  */
-export const FACILITATOR_TIERS = {
-  trial: {
-    monthlyQuota: 100,
-    priceUsdPerMonth: 0,
-    label: 'Trial',
-    description: 'Free 100 settlements per month. No expiry. No SLA.',
-  },
-  basic: {
-    monthlyQuota: 1_000,
-    priceUsdPerMonth: 10,
-    label: 'Basic',
-    description: '1,000 settlements per month. Best-effort support.',
-  },
-  pro: {
-    monthlyQuota: 10_000,
-    priceUsdPerMonth: 50,
-    label: 'Pro',
-    description: '10,000 settlements per month. 24h response SLA.',
-  },
-  enterprise: {
-    monthlyQuota: 1_000_000,
-    priceUsdPerMonth: 500,
-    label: 'Enterprise',
-    description: '1,000,000 settlements per month. Same-day support, custom networks.',
-  },
-} as const satisfies Record<
-  Exclude<FacilitatorTier, 'unlimited'>,
-  { monthlyQuota: number; priceUsdPerMonth: number; label: string; description: string }
->;
+export const FACILITATOR_PRICING = {
+  freeSettlesPerMonth: 25,
+  topUpUsd: 10,
+  topUpAtomicUsdc: 10_000_000,
+} as const;
 
 /**
- * Per-network minimum settle amount (in USD). Settlements below this
- * floor are rejected by the facilitator with HTTP 400 because the
- * facilitator's native-gas spend would exceed the payment value.
+ * Header line of the canonical trial-authorization message. Exported
+ * for consumers that want to assemble the message bytes manually.
+ * Prefer `buildTrialAuthMessage()` below — it's a byte-exact mirror
+ * of the server's verifier, so a successful build guarantees a
+ * successful verify.
  */
-export const FACILITATOR_FLOOR_USD = {
-  evm: 0.02,
-  solana: 0.005,
-} as const;
+export const CANONICAL_MESSAGE_HEADER = 'Auditr Facilitator Trial Authorization';
+
+/**
+ * Parameters for `buildTrialAuthMessage()`. Mirrors the
+ * `FacilitatorTrialRequest` fields that feed into the canonical
+ * message body.
+ */
+export interface BuildTrialAuthMessageArgs {
+  /**
+   * Your wallet address (EVM 0x-prefixed hex or Solana base58).
+   * Use the same casing the server will see when it reconstructs
+   * the message; canonicalization happens server-side AFTER
+   * verifying the signature against this exact byte sequence.
+   */
+  walletAddress: string;
+
+  /** `'evm'` or `'svm'`. Selects the signing scheme. */
+  walletNetwork: 'evm' | 'svm';
+
+  /** ISO-8601 UTC timestamp; must be within ±5 minutes of server now. */
+  timestamp: string;
+
+  /** 16 bytes of randomness as 32 hex chars. One-shot. */
+  nonce: string;
+}
+
+/**
+ * Build the canonical message bytes the trial endpoint verifies your
+ * signature against. **Byte-exact mirror** of the server side
+ * `canonical_message()` (column-12 label alignment, trailing
+ * newline). Sign the returned string verbatim with your wallet's
+ * `personal_sign` (EVM) or `signMessage` (Solana), then pass the
+ * signature back into `auditr.facilitator.trial(...)`.
+ *
+ * ```ts
+ * const timestamp = new Date().toISOString();
+ * const nonce = Array.from(
+ *   crypto.getRandomValues(new Uint8Array(16)),
+ *   (b) => b.toString(16).padStart(2, '0'),
+ * ).join('');
+ *
+ * const message = buildTrialAuthMessage({
+ *   walletAddress: signer.address,
+ *   walletNetwork: 'svm',
+ *   timestamp, nonce,
+ * });
+ * const signature = await signer.signMessage(message);
+ * ```
+ *
+ * Using this helper instead of hand-building the string is the
+ * difference between "it works" and "spend an hour debugging a
+ * single missing space in the Network: label."
+ */
+export function buildTrialAuthMessage(args: BuildTrialAuthMessageArgs): string {
+  // Order, label widths, and trailing newline are all part of the
+  // signed payload. DO NOT REFLOW. The server reconstructs this
+  // exact byte sequence to verify.
+  return (
+    `${CANONICAL_MESSAGE_HEADER}\n` +
+    `Wallet:    ${args.walletAddress}\n` +
+    `Network:   ${args.walletNetwork}\n` +
+    `Timestamp: ${args.timestamp}\n` +
+    `Nonce:     ${args.nonce}\n`
+  );
+}

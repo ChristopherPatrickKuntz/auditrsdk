@@ -1,7 +1,7 @@
 {
   "name": "@auditrxyz/sdk",
-  "version": "0.2.0",
-  "description": "TypeScript SDK for the Auditr x402 API. Pay per call in USDC for audits and monitoring, or provision Bearer tokens for the Auditr-hosted x402 facilitator at facilitator.auditr.xyz.",
+  "version": "0.3.0",
+  "description": "TypeScript SDK for the Auditr x402 API. Pay per call in USDC for audits and monitoring. Run x402 settlements through the Auditr-hosted facilitator: 25 free Solana settles/month + $10 USDC top-up, gas pass-through.",
   "license": "Apache-2.0",
   "author": "Auditr <info@auditr.xyz>",
   "homepage": "https://auditr.xyz",

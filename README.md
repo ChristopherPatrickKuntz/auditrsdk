@@ -61,37 +61,61 @@ for (const finding of report.findings) {
 | `auditr.monitoring.pro(req)`          | Pro          | $25 USDC/mo |
 | `auditr.monitoring.enterprise(req)`   | Enterprise   | $50 USDC/mo |
 
-### Facilitator API
+### Facilitator API (pay-as-you-go)
 
 Run x402 (verify + settle) through our facilitator at
 `https://facilitator.auditr.xyz` instead of operating one yourself.
-Bearer tokens are minted via the SDK and accepted by any x402-aware
-SDK that supports per-endpoint auth headers (the official `x402-py`,
-`x402-ts`, Coinbase Agent Kit, etc.).
+Pay-as-you-go: each settle debits actual chain gas (in USDC) from a
+prepaid balance. No subscription, no markup, no account. 25 free
+Solana settles/month per wallet.
 
-| Method                                    | Tier         | Price        | Quota |
-| ----------------------------------------- | ------------ | ------------ | --------------- |
-| `auditr.facilitator.trial(req)`           | Trial        | Free         | 100 / month |
-| `auditr.facilitator.signup('basic', req)` | Basic        | $10 USDC/mo  | 1,000 / month |
-| `auditr.facilitator.signup('pro', req)`   | Pro          | $50 USDC/mo  | 10,000 / month |
-| `auditr.facilitator.signup('enterprise', req)` | Enterprise | $500 USDC/mo | 1,000,000 / month |
-| `auditr.facilitator.renew(tier, { keyId })` | Same tier | Same          | +30 days |
-| `auditr.facilitator.supported()`          | -            | Free         | Discovery |
-| `auditr.facilitator.adminInfo(token)`     | -            | Free         | Usage / quota check |
+| Method                                  | Price (USDC) | Notes |
+| --------------------------------------- | ------------ | ----- |
+| `auditr.facilitator.trial(req)`         | Free         | 25 settles/month, Solana-only, bound to a signed wallet |
+| `auditr.facilitator.topup({ keyId })`   | $10          | Credits 10,000,000 atomic USDC. Never expires. |
+| `auditr.facilitator.supported()`        | Free         | x402 discovery |
+| `auditr.facilitator.adminInfo(token)`   | Free         | Read balance + free quota usage |
+| `auditr.facilitator.pricing()`          | -            | Version-baked pricing snapshot |
 
 ```ts
-// 1. Mint a key (trial = free, signup = pay USDC via x402)
+import { Auditr, buildTrialAuthMessage } from '@auditrxyz/sdk';
+
+// 1. Build + sign the canonical trial-authorization message with
+//    your wallet (EIP-191 for EVM, ed25519 for Solana).
+//    `buildTrialAuthMessage` is a byte-exact mirror of the server
+//    verifier, so a successful build guarantees a successful verify
+//    on the server.
+const timestamp = new Date().toISOString();
+const nonce = Array.from(
+  crypto.getRandomValues(new Uint8Array(16)),
+  (b) => b.toString(16).padStart(2, '0'),
+).join('');
+
+const message = buildTrialAuthMessage({
+  walletAddress,
+  walletNetwork: 'svm',
+  timestamp,
+  nonce,
+});
+const signature = await wallet.signMessage(message);
+
+// 2. Mint a wallet-bound trial key.
 const key = await auditr.facilitator.trial({
   label: 'my bot',
   ownerContact: 'me@example.com',
+  walletAddress,
+  walletNetwork: 'svm',
+  timestamp,
+  nonce,
+  signature,
 });
 
-// 2. Wire it into any x402-aware client. Python example using x402-py:
+// 3. Top up when you need more credits.
+await auditr.facilitator.topup({ keyId: key.keyId });
+
+// 4. Wire it into any x402-aware client. Python via x402-py:
 //
-//   from x402.http import FacilitatorConfig, HTTPFacilitatorClient
-//   from x402.http.facilitator_client_base import CreateHeadersAuthProvider
-//
-//   bearer = {"Authorization": f"Bearer {token}"}
+//   bearer = {"Authorization": f"Bearer {key.token}"}
 //   auth = CreateHeadersAuthProvider(
 //       lambda: {"verify": bearer, "settle": bearer, "supported": {}}
 //   )
@@ -100,13 +124,20 @@ const key = await auditr.facilitator.trial({
 //   )
 ```
 
-The audited public x402 contracts cryptographically bind the
-payment destination in the buyer's signature, so we cannot extract a
-per-settlement fee. Pricing is a flat monthly subscription only. A
-per-network minimum settle floor (`$0.02` EVM / `$0.005` Solana)
-prevents sub-cent dust attacks. See
+**Free quota is Solana-only.** A trial key bound to `walletNetwork: 'evm'`
+has zero free settlements; it exists so you can `topup()` and then settle
+on Base from your prepaid balance. Mint with `walletNetwork: 'svm'` if you
+want the 25 free Solana settles per month.
+
+Each settle response includes the actual gas debited in USDC and an
+`ata_created` flag (Solana ATA rent is debited only on first-time
+recipients). When the prepaid balance is exhausted, `/settle`
+returns **HTTP 409 `topup_required`** (deliberately NOT 402, so x402
+client middleware doesn't auto-loop into a new payment challenge).
+A gas circuit breaker returns **503 with `Retry-After`** during L1
+spikes or degraded price feeds. See
 [examples/facilitator-trial.ts](examples/facilitator-trial.ts) and
-[examples/facilitator-signup.ts](examples/facilitator-signup.ts) for
+[examples/facilitator-topup.ts](examples/facilitator-topup.ts) for
 working snippets.
 
 The SDK handles the HTTP 402 dance for you. A `POST` to a paid

@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-28
+
+Breaking change to the `auditr.facilitator.*` surface to match the
+v0.3 backend rewrite that replaces subscription tiers with
+pay-as-you-go gas pass-through billing. Audits and monitoring APIs
+are unchanged.
+
+### Breaking
+
+- **Removed**: `auditr.facilitator.signup(tier, req)` and
+  `auditr.facilitator.renew(tier, req)`. Subscription tiers are
+  gone; usage is metered against a prepaid USDC balance.
+- **Removed types**: `FacilitatorTier`, `PaidFacilitatorTier`,
+  `FacilitatorSignupRequest`, `FacilitatorRenewRequest`,
+  `FacilitatorRenewResponse`.
+- **Removed constants**: `FACILITATOR_TIERS`, `FACILITATOR_FLOOR_USD`.
+- **`FacilitatorKey` shape changed**: `tier`, `monthlySettleQuota`,
+  and `paidThroughAt` removed; `walletAddress`, `walletNetwork`,
+  `freeSettlesPerMonth`, `paidBalanceAtomicUsdc`, `alreadyExisted`
+  added. `token` is now optional (omitted on `alreadyExisted: true`).
+- **`FacilitatorAdminInfo.auth` shape changed**: `tier`,
+  `effectiveTier`, `paidThroughAt`, `monthlySettleQuota`,
+  `monthlySettleUsed`, `monthlyPeriodStart` removed; `isInternal`,
+  `walletAddress`, `walletNetwork`, `paidBalanceAtomicUsdc`,
+  `freeSettlesUsed`, `freeSettlesRemaining`, `freePeriodStart`
+  added. `feePolicy` block removed; new top-level `billing` block.
+- **`auditr.facilitator.trial(request)` request shape changed**:
+  now requires `walletAddress`, `walletNetwork`, `timestamp`,
+  `nonce`, `signature`. The signature is verified server-side so
+  the free 25-settle/month quota is bound to a wallet you control.
+
+### Added
+
+- `auditr.facilitator.topup({ keyId })` pays $10 USDC via x402 and
+  credits the key's prepaid balance. Idempotent on the underlying
+  settlement tx hash.
+- `auditr.facilitator.pricing()` returns the version-baked default
+  pricing snapshot (`freeSettlesPerMonth`, `topUpUsd`,
+  `topUpAtomicUsdc`); authoritative values come from
+  `adminInfo().billing` at runtime.
+- `buildTrialAuthMessage({ walletAddress, walletNetwork, timestamp,
+  nonce })` builds the canonical trial-authorization message bytes
+  the server verifies against. Byte-exact mirror of the server-side
+  `canonical_message()` (column-12 label alignment, trailing
+  newline). Use this instead of hand-rolling the string; a single
+  misplaced space causes a `wallet_signature_invalid` rejection
+  that's miserable to debug. Locked in via a golden-bytes vitest.
+- Types: `FacilitatorWalletNetwork`, `FacilitatorTrialRequest`,
+  `FacilitatorTopupRequest`, `FacilitatorTopupResponse`,
+  `BuildTrialAuthMessageArgs`.
+- Constants: `FACILITATOR_PRICING`, `CANONICAL_MESSAGE_HEADER` (the
+  header line; `buildTrialAuthMessage` builds the whole message).
+- New example: `examples/facilitator-topup.ts`; existing
+  `examples/facilitator-trial.ts` rewritten to use
+  `buildTrialAuthMessage` so the wire format is one function call,
+  not five concatenated f-strings.
+- `FacilitatorTrialRequest.walletNetwork` TSDoc now spells out that
+  `'evm'` keys get zero free settles; the 25/month free quota is
+  Solana-only by design and is not transferable.
+
+### Changed
+
+- 13 new vitest cases covering the new request/response shapes,
+  topup x402 flow, already-credited replay, wallet-signature
+  validation, adminInfo `billing` block, and the
+  `buildTrialAuthMessage` golden bytes. 29 tests total, all passing.
+
+### Fixed
+
+- `tsconfig.examples.json` gains a `paths` mapping for
+  `@auditrxyz/sdk` and `@auditrxyz/sdk/schema` pointing at
+  `src/index.ts` and `src/schema/index.ts`. The legacy examples
+  (`basic.ts`, `monitoring.ts`, `coinbase-agent-kit.ts`,
+  `manual-eip3009.ts`) import the package by its bare specifier;
+  TypeScript's Bundler resolution self-references through the
+  package `exports` map to `./dist/index.d.ts`. CI runs
+  `typecheck:examples` BEFORE `build`, so the previous config
+  failed with `Cannot find module '@auditrxyz/sdk'` on a clean
+  checkout. The paths mapping resolves examples to source, no
+  build required. Reproduced by removing `dist/` locally and
+  rerunning the typecheck; with the fix in place a clean
+  prepublish gate passes top to bottom (typecheck + typecheck
+  examples + lint + 29 tests + build).
+
 ## [0.2.0] - 2026-05-28
 
 First publish to npm. 0.1.0 was never released, so the
@@ -83,6 +167,7 @@ contents of this entry are everything shipped to the registry.
   and a manual viem implementation.
 - TSDoc on the entire public surface.
 
-[Unreleased]: https://github.com/ChristopherPatrickKuntz/auditrsdk/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ChristopherPatrickKuntz/auditrsdk/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ChristopherPatrickKuntz/auditrsdk/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ChristopherPatrickKuntz/auditrsdk/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ChristopherPatrickKuntz/auditrsdk/releases/tag/v0.1.0

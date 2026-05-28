@@ -17,7 +17,7 @@
  * ```
  */
 
-import { DEFAULT_BASE_URL, DEFAULT_FACILITATOR_URL } from './constants.js';
+import { DEFAULT_BASE_URL, DEFAULT_FACILITATOR_URL, FACILITATOR_PRICING } from './constants.js';
 import { ValidationError, TimeoutError, SignerError, HttpError, PaymentRequiredError } from './errors.js';
 import {
   auditReportSchema,
@@ -39,11 +39,11 @@ import type {
   CreateMonitoringResponse,
   FacilitatorAdminInfo,
   FacilitatorKey,
-  FacilitatorRenewRequest,
-  FacilitatorRenewResponse,
-  FacilitatorSignupRequest,
   FacilitatorSupportedKind,
-  PaidFacilitatorTier,
+  FacilitatorTopupRequest,
+  FacilitatorTopupResponse,
+  FacilitatorTrialRequest,
+  FacilitatorWalletNetwork,
 } from './types.js';
 import {
   assertOk,
@@ -533,33 +533,61 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Operations for the Auditr-hosted x402 facilitator at
  * `https://facilitator.auditr.xyz`. Bot/agent fleets that want to
  * run x402 (verify + settle) without operating their own facilitator
- * provision a Bearer token here and point any x402 SDK
- * (Coinbase AgentKit, x402-py, x402-ts) at our URL.
+ * provision a Bearer here, top up a prepaid USDC balance, and point
+ * any x402 SDK (Coinbase AgentKit, x402-py, x402-ts, etc.) at the URL.
+ *
+ * Pay-as-you-go: each settle debits actual chain gas (in USDC) from
+ * the balance. No subscription, no markup. 25 free Solana settles
+ * per month per wallet.
  */
 class FacilitatorApi {
   constructor(private readonly parent: Auditr) {}
 
   /**
-   * Mint a free trial key. 100 settlements per month, no expiry, no
-   * payment required. IP-rate-limited on the server side; one or two
-   * trial keys per IP per day in normal operation.
+   * Mint a free trial key bound to a wallet you control. 25 free
+   * Solana-only settles per month, no expiry. The wallet signature
+   * is verified server-side so no one can claim your address to
+   * burn your free quota.
+   *
+   * Caller MUST produce `signature` over the canonical message
+   * (verbatim, including newlines):
+   *
+   *     Auditr Facilitator Trial Authorization
+   *     Wallet:    <walletAddress>
+   *     Network:   <walletNetwork>
+   *     Timestamp: <timestamp>
+   *     Nonce:     <nonce>
+   *
+   * EIP-191 `personal_sign` for EVM, ed25519 `signMessage` for Solana.
+   *
+   * If a key already exists for the given wallet the response
+   * returns `alreadyExisted: true` WITHOUT `token`; Auditr does not
+   * re-issue lost tokens.
    *
    * ```ts
    * const key = await auditr.facilitator.trial({
    *   label: 'my bot',
    *   ownerContact: 'me@example.com',
+   *   walletAddress: signer.address,
+   *   walletNetwork: 'svm',
+   *   timestamp,
+   *   nonce,
+   *   signature,
    * });
-   * // Send `key.token` as `Authorization: Bearer ...` to
-   * // `${key.facilitatorUrl}/verify` and `/settle`.
    * ```
    */
-  async trial(request: FacilitatorSignupRequest): Promise<FacilitatorKey> {
-    this.assertSignupRequest(request);
+  async trial(request: FacilitatorTrialRequest): Promise<FacilitatorKey> {
+    this.assertTrialRequest(request);
     const raw = await this.parent.freePost<unknown>(
       '/api/facilitator/trial',
       {
         label: request.label,
         owner_contact: request.ownerContact,
+        wallet_address: request.walletAddress,
+        wallet_network: request.walletNetwork,
+        timestamp: request.timestamp,
+        nonce: request.nonce,
+        signature: request.signature,
         networks_csv: request.networksCsv ?? '*',
       },
     );
@@ -567,51 +595,25 @@ class FacilitatorApi {
   }
 
   /**
-   * Pay for a basic facilitator subscription. $10 USDC for 30 days.
-   * The SDK's configured `PaymentSigner` produces the EIP-3009 auth
-   * exactly the same way it does for audit payments.
+   * Top up an existing key's prepaid balance. Pays `topUpUsd` USDC
+   * via x402 and credits `topUpAtomicUsdc` to the key. Idempotent on
+   * the underlying settlement tx hash: a retry of a successful top
+   * up cannot double-credit.
    *
    * ```ts
-   * const key = await auditr.facilitator.signup('basic', {
-   *   label: 'Acme bot fleet',
-   *   ownerContact: 'ops@acme.io',
-   * });
+   * const r = await auditr.facilitator.topup({ keyId: key.keyId });
+   * console.log('new balance:', r.paidBalanceUsd);
    * ```
-   *
-   * After lapse, the key silently falls back to the trial quota
-   * until renewed. Call `adminInfo` with the returned token to read
-   * remaining quota and `paidThroughAt`.
    */
-  signup(
-    tier: PaidFacilitatorTier,
-    request: FacilitatorSignupRequest,
-  ): Promise<FacilitatorKey> {
-    this.assertSignupRequest(request);
-    return this.createSubscription(tier, {
-      label: request.label,
-      owner_contact: request.ownerContact,
-      networks_csv: request.networksCsv ?? '*',
-    });
-  }
-
-  /**
-   * Pay for another 30 days at the chosen tier. Paying a higher
-   * tier than the key's current stored tier upgrades it in the
-   * same call (e.g. `renew('pro', keyId)` on a `basic` key
-   * upgrades to pro AND extends paid_through by 30 days).
-   */
-  async renew(
-    tier: PaidFacilitatorTier,
-    request: FacilitatorRenewRequest,
-  ): Promise<FacilitatorRenewResponse> {
+  async topup(request: FacilitatorTopupRequest): Promise<FacilitatorTopupResponse> {
     if (!request || !request.keyId) {
-      throw new ValidationError('renew requires { keyId }', null);
+      throw new ValidationError('topup requires { keyId }', null);
     }
     const { response } = await this.parent.paidPost<unknown>(
-      `/api/x402/facilitator/renew/${tier}`,
+      '/api/x402/facilitator/topup',
       { key_id: request.keyId },
     );
-    return parseRenewResponse(response);
+    return parseTopupResponse(response);
   }
 
   /**
@@ -630,9 +632,9 @@ class FacilitatorApi {
 
   /**
    * Auth'd read of the facilitator's `/admin/info` for a given key.
-   * Returns the caller's tier, remaining quota, `paidThroughAt`,
-   * and other operator-facing state. Send the same Bearer token you
-   * use for /verify and /settle.
+   * Returns the caller's prepaid balance, free quota usage, and
+   * billing constants. Send the same Bearer token you use for
+   * /verify and /settle.
    */
   async adminInfo(token: string): Promise<FacilitatorAdminInfo> {
     if (!token) {
@@ -645,28 +647,56 @@ class FacilitatorApi {
     return normalizeAdminInfo(parsed);
   }
 
-  private assertSignupRequest(request: FacilitatorSignupRequest): void {
-    if (!request || typeof request !== 'object') {
-      throw new ValidationError('signup/trial requires a request object', null);
-    }
-    if (!request.label || typeof request.label !== 'string') {
-      throw new ValidationError('signup/trial requires `label`', null);
-    }
-    if (!request.ownerContact || typeof request.ownerContact !== 'string') {
-      throw new ValidationError('signup/trial requires `ownerContact`', null);
-    }
+  /**
+   * Constant pricing snapshot baked into this SDK version. Authoritative
+   * values come from `.adminInfo()`.billing at runtime; this is a
+   * convenience for UI defaults.
+   */
+  pricing(): typeof FACILITATOR_PRICING {
+    return FACILITATOR_PRICING;
   }
 
-  private async createSubscription(
-    tier: PaidFacilitatorTier,
-    body: Record<string, unknown>,
-  ): Promise<FacilitatorKey> {
-    const { response } = await this.parent.paidPost<unknown>(
-      `/api/x402/facilitator/signup/${tier}`,
-      body,
-    );
-    return parseFacilitatorKey(response);
+  private assertTrialRequest(request: FacilitatorTrialRequest): void {
+    if (!request || typeof request !== 'object') {
+      throw new ValidationError('trial requires a request object', null);
+    }
+    const required = ['label', 'ownerContact', 'walletAddress', 'walletNetwork', 'timestamp', 'nonce', 'signature'] as const;
+    for (const field of required) {
+      if (!request[field] || typeof request[field] !== 'string') {
+        throw new ValidationError(`trial requires \`${field}\``, null);
+      }
+    }
+    if (request.walletNetwork !== 'evm' && request.walletNetwork !== 'svm') {
+      throw new ValidationError(`trial.walletNetwork must be 'evm' or 'svm'`, null);
+    }
+    if (!/^[0-9a-fA-F]{32}$/.test(request.nonce)) {
+      throw new ValidationError('trial.nonce must be 16 bytes hex (32 chars)', null);
+    }
   }
+}
+
+function parseTopupResponse(raw: unknown): FacilitatorTopupResponse {
+  if (!raw || typeof raw !== 'object') {
+    throw new ValidationError('Topup response is not an object', null);
+  }
+  const obj = raw as Record<string, unknown>;
+  if (
+    typeof obj.key_id !== 'string' ||
+    typeof obj.tx_hash !== 'string' ||
+    typeof obj.credited !== 'boolean'
+  ) {
+    throw new ValidationError('Topup response missing required fields', null);
+  }
+  const balanceAtomic = Number(obj.paid_balance_atomic_usdc ?? 0);
+  return {
+    keyId: obj.key_id,
+    txHash: obj.tx_hash,
+    credited: obj.credited,
+    paidBalanceAtomicUsdc: balanceAtomic,
+    paidBalanceUsd: Number(obj.paid_balance_usd ?? balanceAtomic / 1e6),
+    facilitatorUrl: (obj.facilitator_url ?? DEFAULT_FACILITATOR_URL) as string,
+    integrationDocs: (obj.integration_docs ?? '') as string,
+  };
 }
 
 function parseFacilitatorKey(raw: unknown): FacilitatorKey {
@@ -675,45 +705,28 @@ function parseFacilitatorKey(raw: unknown): FacilitatorKey {
   }
   const obj = raw as Record<string, unknown>;
   const keyId = obj.key_id;
-  const tier = obj.tier;
-  const monthlySettleQuota = obj.monthly_settle_quota;
-  const paidThroughAt = (obj.paid_through_at ?? null) as string | null;
-  const token = obj.token;
-  const facilitatorUrl = (obj.facilitator_url ?? DEFAULT_FACILITATOR_URL) as string;
-  const integrationDocs = (obj.integration_docs ?? '') as string;
-  if (typeof keyId !== 'string' || typeof token !== 'string' || typeof tier !== 'string') {
-    throw new ValidationError('Facilitator key response missing required fields', null);
+  if (typeof keyId !== 'string') {
+    throw new ValidationError('Facilitator key response missing `key_id`', null);
   }
-  if (typeof monthlySettleQuota !== 'number') {
-    throw new ValidationError('Facilitator key response.monthly_settle_quota is not a number', null);
+  const alreadyExisted = Boolean(obj.already_existed ?? false);
+  const token = typeof obj.token === 'string' ? obj.token : undefined;
+  if (!alreadyExisted && typeof token !== 'string') {
+    throw new ValidationError('Facilitator key response missing `token` on first mint', null);
   }
+  const walletNetwork = obj.wallet_network;
   return {
     keyId,
-    tier: tier as FacilitatorKey['tier'],
-    monthlySettleQuota,
-    paidThroughAt,
+    walletAddress: typeof obj.wallet_address === 'string' ? obj.wallet_address : null,
+    walletNetwork:
+      walletNetwork === 'evm' || walletNetwork === 'svm'
+        ? (walletNetwork as FacilitatorWalletNetwork)
+        : null,
+    freeSettlesPerMonth: Number(obj.free_settles_per_month ?? FACILITATOR_PRICING.freeSettlesPerMonth),
+    paidBalanceAtomicUsdc: Number(obj.paid_balance_atomic_usdc ?? 0),
+    alreadyExisted,
     token,
-    facilitatorUrl,
-    integrationDocs,
-  };
-}
-
-function parseRenewResponse(raw: unknown): FacilitatorRenewResponse {
-  if (!raw || typeof raw !== 'object') {
-    throw new ValidationError('Renew response is not an object', null);
-  }
-  const obj = raw as Record<string, unknown>;
-  if (
-    typeof obj.key_id !== 'string' ||
-    typeof obj.tier !== 'string' ||
-    typeof obj.paid_through_at !== 'string'
-  ) {
-    throw new ValidationError('Renew response missing required fields', null);
-  }
-  return {
-    keyId: obj.key_id,
-    tier: obj.tier as FacilitatorRenewResponse['tier'],
-    paidThroughAt: obj.paid_through_at,
+    facilitatorUrl: (obj.facilitator_url ?? DEFAULT_FACILITATOR_URL) as string,
+    integrationDocs: (obj.integration_docs ?? '') as string,
   };
 }
 
@@ -723,31 +736,36 @@ function normalizeAdminInfo(raw: unknown): FacilitatorAdminInfo {
   }
   const obj = raw as Record<string, unknown>;
   const auth = obj.auth as Record<string, unknown> | undefined;
-  const fee = obj.fee_policy as Record<string, unknown> | undefined;
-  if (!auth || !fee) {
-    throw new ValidationError('/admin/info response missing auth or fee_policy', null);
+  const billing = obj.billing as Record<string, unknown> | undefined;
+  if (!auth || !billing) {
+    throw new ValidationError('/admin/info response missing auth or billing', null);
   }
+  const walletNetwork = auth.wallet_network;
   return {
     ok: true,
     service: 'auditr_facilitator',
     networkMode: obj.network_mode === 'testnet' ? 'testnet' : 'mainnet',
     chains: Array.isArray(obj.chains) ? (obj.chains as string[]) : [],
-    feePolicy: {
-      evmPct: Number(fee.evm_pct ?? 0),
-      evmFloorUsd: Number(fee.evm_floor_usd ?? 0),
-      svmPct: Number(fee.svm_pct ?? 0),
-      svmFloorUsd: Number(fee.svm_floor_usd ?? 0),
-      extractionWired: Boolean(fee.extraction_wired ?? false),
+    billing: {
+      freeQuotaPerMonth: Number(billing.free_quota_per_month ?? FACILITATOR_PRICING.freeSettlesPerMonth),
+      topupAmountUsd: Number(billing.topup_amount_usd ?? FACILITATOR_PRICING.topUpUsd),
+      topupAmountAtomicUsdc: Number(billing.topup_amount_atomic_usdc ?? FACILITATOR_PRICING.topUpAtomicUsdc),
+      gasBufferAtomicUsdc: Number(billing.gas_buffer_atomic_usdc ?? 500),
+      gasBreakerAtomicUsdc: Number(billing.gas_breaker_atomic_usdc ?? 100_000),
     },
     auth: {
       keyId: String(auth.key_id ?? ''),
       label: String(auth.label ?? ''),
-      tier: (auth.tier ?? 'trial') as FacilitatorAdminInfo['auth']['tier'],
-      effectiveTier: (auth.effective_tier ?? 'trial') as FacilitatorAdminInfo['auth']['effectiveTier'],
-      paidThroughAt: (auth.paid_through_at ?? null) as string | null,
-      monthlySettleQuota: Number(auth.monthly_settle_quota ?? 0),
-      monthlySettleUsed: Number(auth.monthly_settle_used ?? 0),
-      monthlyPeriodStart: String(auth.monthly_period_start ?? ''),
+      isInternal: Boolean(auth.is_internal ?? false),
+      walletAddress: typeof auth.wallet_address === 'string' ? auth.wallet_address : null,
+      walletNetwork:
+        walletNetwork === 'evm' || walletNetwork === 'svm'
+          ? (walletNetwork as FacilitatorWalletNetwork)
+          : null,
+      paidBalanceAtomicUsdc: Number(auth.paid_balance_atomic_usdc ?? 0),
+      freeSettlesUsed: Number(auth.free_settles_used ?? 0),
+      freeSettlesRemaining: Number(auth.free_settles_remaining ?? 0),
+      freePeriodStart: String(auth.free_period_start ?? ''),
     },
   };
 }

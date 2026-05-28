@@ -30,12 +30,11 @@ export type {
   AuditTier,
   MonitoringTier,
   MonitoringTargetKind,
-  FacilitatorTier,
-  PaidFacilitatorTier,
-  FacilitatorSignupRequest,
-  FacilitatorRenewRequest,
+  FacilitatorWalletNetwork,
+  FacilitatorTrialRequest,
+  FacilitatorTopupRequest,
+  FacilitatorTopupResponse,
   FacilitatorKey,
-  FacilitatorRenewResponse,
   FacilitatorAdminInfo,
   FacilitatorSupportedKind,
   CreateAuditRequest,
@@ -65,10 +64,15 @@ export {
 export {
   AUDIT_TIERS,
   MONITORING_TIERS,
-  FACILITATOR_TIERS,
-  FACILITATOR_FLOOR_USD,
+  FACILITATOR_PRICING,
+  CANONICAL_MESSAGE_HEADER,
+  buildTrialAuthMessage,
   SUPPORTED_EVM_CHAINS,
   SUPPORTED_NETWORKS_CAIP2,
   DEFAULT_BASE_URL,
   DEFAULT_FACILITATOR_URL,
+} from './constants.js';
+
+export type {
+  BuildTrialAuthMessageArgs,
 } from './constants.js';

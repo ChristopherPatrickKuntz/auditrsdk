@@ -7,6 +7,8 @@ import {
   SignerError,
   TimeoutError,
   ValidationError,
+  buildTrialAuthMessage,
+  CANONICAL_MESSAGE_HEADER,
   type PaymentSigner,
 } from '../src/index.js';
 
@@ -258,25 +260,44 @@ describe('paid POST flow', () => {
 });
 
 describe('facilitator.trial', () => {
-  it('requires label and ownerContact', async () => {
+  const validTrial = {
+    label: 'my bot',
+    ownerContact: 'me@example.com',
+    walletAddress: '0x' + '11'.repeat(20),
+    walletNetwork: 'evm' as const,
+    timestamp: '2026-05-28T20:00:00+00:00',
+    nonce: '0123456789abcdef0123456789abcdef',
+    signature: '0x' + 'aa'.repeat(65),
+  };
+
+  it('requires all signature fields', async () => {
     const client = new Auditr({ signer: noopSigner() });
     await expect(
       client.facilitator.trial({} as never),
     ).rejects.toThrow(ValidationError);
     await expect(
-      client.facilitator.trial({ label: 'x' } as never),
+      client.facilitator.trial({ ...validTrial, label: '' } as never),
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      client.facilitator.trial({ ...validTrial, walletNetwork: 'tvm' } as never),
+    ).rejects.toThrow(ValidationError);
+    // Bad nonce shape.
+    await expect(
+      client.facilitator.trial({ ...validTrial, nonce: 'not-hex' }),
     ).rejects.toThrow(ValidationError);
   });
 
-  it('returns a parsed FacilitatorKey', async () => {
+  it('returns a parsed FacilitatorKey on first mint', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
           key_id: 'abc12345',
-          tier: 'trial',
-          monthly_settle_quota: 100,
-          paid_through_at: null,
+          wallet_address: '0x' + '11'.repeat(20),
+          wallet_network: 'evm',
+          free_settles_per_month: 25,
+          paid_balance_atomic_usdc: 0,
           token: 'auditr_pub_abc12345_secretsecretsecretsecretsecretsecretsec',
+          already_existed: false,
           facilitator_url: 'https://facilitator.auditr.xyz',
           integration_docs: 'https://auditr.xyz/faq#facilitator-api',
         }),
@@ -284,38 +305,64 @@ describe('facilitator.trial', () => {
       ),
     );
     const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
-    const key = await client.facilitator.trial({
-      label: 'my bot',
-      ownerContact: 'me@example.com',
-    });
+    const key = await client.facilitator.trial(validTrial);
     expect(key.keyId).toBe('abc12345');
-    expect(key.tier).toBe('trial');
-    expect(key.monthlySettleQuota).toBe(100);
-    expect(key.paidThroughAt).toBeNull();
+    expect(key.alreadyExisted).toBe(false);
+    expect(key.freeSettlesPerMonth).toBe(25);
     expect(key.token).toContain('auditr_pub_');
-    expect(key.facilitatorUrl).toBe('https://facilitator.auditr.xyz');
-    // POST body should serialize ownerContact -> owner_contact
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    const call = fetchImpl.mock.calls[0]!;
-    expect(call[0]).toMatch(/\/api\/facilitator\/trial$/);
-    const sent = JSON.parse(call[1].body as string);
+    expect(key.walletNetwork).toBe('evm');
+    // Body shape: snake_case mapping.
+    const sent = JSON.parse(fetchImpl.mock.calls[0]![1].body as string);
     expect(sent.owner_contact).toBe('me@example.com');
-    expect(sent.networks_csv).toBe('*');
+    expect(sent.wallet_address).toBe(validTrial.walletAddress);
+    expect(sent.wallet_network).toBe('evm');
+    expect(sent.nonce).toBe(validTrial.nonce);
   });
 
-  it('rejects 4xx errors as HttpError', async () => {
+  it('parses already_existed response without a token', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response('rate limited', { status: 429 }),
+      new Response(
+        JSON.stringify({
+          key_id: 'abc12345',
+          wallet_address: validTrial.walletAddress,
+          wallet_network: 'evm',
+          free_settles_per_month: 25,
+          paid_balance_atomic_usdc: 4_200_000,
+          already_existed: true,
+          facilitator_url: 'https://facilitator.auditr.xyz',
+          integration_docs: 'https://auditr.xyz/faq#facilitator-api',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      ),
     );
     const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
-    await expect(
-      client.facilitator.trial({ label: 'x', ownerContact: 'me@example.com' }),
-    ).rejects.toThrow(HttpError);
+    const key = await client.facilitator.trial(validTrial);
+    expect(key.alreadyExisted).toBe(true);
+    expect(key.token).toBeUndefined();
+    expect(key.paidBalanceAtomicUsdc).toBe(4_200_000);
+  });
+
+  it('rejects 400 wallet_signature_invalid as HttpError', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ detail: { error: 'wallet_signature_invalid' } }),
+        { status: 400, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    await expect(client.facilitator.trial(validTrial)).rejects.toThrow(HttpError);
   });
 });
 
-describe('facilitator.signup', () => {
-  it('drives the x402 flow on the paid endpoint', async () => {
+describe('facilitator.topup', () => {
+  it('requires keyId', async () => {
+    const client = new Auditr({ signer: noopSigner() });
+    await expect(
+      client.facilitator.topup({} as never),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('drives the x402 flow and parses topup response', async () => {
     const challengeBody = JSON.stringify({
       x402Version: 2,
       accepts: [
@@ -331,11 +378,11 @@ describe('facilitator.signup', () => {
       ],
     });
     const successBody = JSON.stringify({
-      key_id: 'def67890',
-      tier: 'basic',
-      monthly_settle_quota: 1000,
-      paid_through_at: '2026-06-28T00:00:00+00:00',
-      token: 'auditr_pub_def67890_secretsecretsecretsecretsecretsecretse',
+      key_id: 'abc12345',
+      tx_hash: '0xdeadbeef',
+      credited: true,
+      paid_balance_atomic_usdc: 10_000_000,
+      paid_balance_usd: 10.0,
       facilitator_url: 'https://facilitator.auditr.xyz',
       integration_docs: 'https://auditr.xyz/faq#facilitator-api',
     });
@@ -352,31 +399,47 @@ describe('facilitator.signup', () => {
       )
       .mockResolvedValueOnce(
         new Response(successBody, {
-          status: 201,
+          status: 200,
           headers: { 'content-type': 'application/json' },
         }),
       );
     const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
-    const key = await client.facilitator.signup('basic', {
-      label: 'Acme bot',
-      ownerContact: 'ops@acme.io',
-    });
-    expect(key.tier).toBe('basic');
-    expect(key.monthlySettleQuota).toBe(1000);
-    expect(key.paidThroughAt).toBe('2026-06-28T00:00:00+00:00');
-    // Two calls: unsigned challenge + signed retry.
+    const r = await client.facilitator.topup({ keyId: 'abc12345' });
+    expect(r.credited).toBe(true);
+    expect(r.paidBalanceUsd).toBe(10);
+    expect(r.txHash).toBe('0xdeadbeef');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    const retryHeaders = fetchImpl.mock.calls[1]![1].headers as Record<string, string>;
-    expect(retryHeaders['payment-signature']).toBe('base64.payment-signature');
+    // Body must use snake_case key_id.
+    const sent = JSON.parse(fetchImpl.mock.calls[0]![1].body as string);
+    expect(sent.key_id).toBe('abc12345');
   });
-});
 
-describe('facilitator.renew', () => {
-  it('requires keyId', async () => {
-    const client = new Auditr({ signer: noopSigner() });
-    await expect(
-      client.facilitator.renew('pro', {} as never),
-    ).rejects.toThrow(ValidationError);
+  it('parses an already-credited replay (credited=false)', async () => {
+    const challengeBody = JSON.stringify({
+      x402Version: 2,
+      accepts: [{
+        scheme: 'exact', network: 'eip155:8453',
+        asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        amount: '10000000', payTo: '0xB', maxTimeoutSeconds: 300, extra: {},
+      }],
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(challengeBody, {
+        status: 402, headers: {
+          'content-type': 'application/json',
+          'payment-required': Buffer.from(challengeBody).toString('base64'),
+        },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        key_id: 'abc12345', tx_hash: '0xdeadbeef', credited: false,
+        paid_balance_atomic_usdc: 10_000_000, paid_balance_usd: 10,
+        facilitator_url: 'https://facilitator.auditr.xyz',
+        integration_docs: '',
+      }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    const r = await client.facilitator.topup({ keyId: 'abc12345' });
+    expect(r.credited).toBe(false);
   });
 });
 
@@ -467,7 +530,7 @@ describe('facilitator.supported', () => {
 });
 
 describe('facilitator.adminInfo', () => {
-  it('parses the auth + feePolicy + chains payload', async () => {
+  it('parses the auth + billing + chains payload', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -475,22 +538,23 @@ describe('facilitator.adminInfo', () => {
           service: 'auditr_facilitator',
           network_mode: 'mainnet',
           chains: ['evm:base -> 0xABC', 'svm:solana -> XYZ'],
-          fee_policy: {
-            evm_pct: 0.005,
-            evm_floor_usd: 0.02,
-            svm_pct: 0.005,
-            svm_floor_usd: 0.005,
-            extraction_wired: false,
+          billing: {
+            free_quota_per_month: 25,
+            topup_amount_usd: 10,
+            topup_amount_atomic_usdc: 10_000_000,
+            gas_buffer_atomic_usdc: 500,
+            gas_breaker_atomic_usdc: 100_000,
           },
           auth: {
             key_id: 'abc12345',
             label: 'my bot',
-            tier: 'basic',
-            effective_tier: 'basic',
-            paid_through_at: '2026-06-28T00:00:00+00:00',
-            monthly_settle_quota: 1000,
-            monthly_settle_used: 42,
-            monthly_period_start: '2026-05-01T00:00:00+00:00',
+            is_internal: false,
+            wallet_address: '0x' + '11'.repeat(20),
+            wallet_network: 'evm',
+            paid_balance_atomic_usdc: 4_200_000,
+            free_settles_used: 7,
+            free_settles_remaining: 18,
+            free_period_start: '2026-05-01T00:00:00+00:00',
           },
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
@@ -500,11 +564,14 @@ describe('facilitator.adminInfo', () => {
     const info = await client.facilitator.adminInfo('auditr_pub_abc12345_secret');
     expect(info.networkMode).toBe('mainnet');
     expect(info.chains).toHaveLength(2);
-    expect(info.auth.tier).toBe('basic');
-    expect(info.auth.effectiveTier).toBe('basic');
-    expect(info.auth.monthlySettleQuota).toBe(1000);
-    expect(info.auth.monthlySettleUsed).toBe(42);
-    expect(info.feePolicy.extractionWired).toBe(false);
+    expect(info.billing.freeQuotaPerMonth).toBe(25);
+    expect(info.billing.topupAmountUsd).toBe(10);
+    expect(info.billing.gasBufferAtomicUsdc).toBe(500);
+    expect(info.auth.isInternal).toBe(false);
+    expect(info.auth.walletNetwork).toBe('evm');
+    expect(info.auth.paidBalanceAtomicUsdc).toBe(4_200_000);
+    expect(info.auth.freeSettlesUsed).toBe(7);
+    expect(info.auth.freeSettlesRemaining).toBe(18);
     // Must send the Bearer to the facilitator host.
     const call = fetchImpl.mock.calls[0]!;
     expect(call[0]).toBe('https://facilitator.auditr.xyz/admin/info');
@@ -518,53 +585,71 @@ describe('facilitator.adminInfo', () => {
   });
 });
 
-describe('facilitator.renew (happy path)', () => {
-  it('drives the x402 flow and returns parsed renew response', async () => {
-    const challengeBody = JSON.stringify({
-      x402Version: 2,
-      accepts: [
-        {
-          scheme: 'exact',
-          network: 'eip155:8453',
-          asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-          amount: '50000000',
-          payTo: '0xB03E5421f8588ea7C616f3E164461137E2a132E0',
-          maxTimeoutSeconds: 300,
-          extra: { name: 'USD Coin', version: '2' },
-        },
-      ],
+describe('buildTrialAuthMessage (byte-exact mirror of server canonical_message)', () => {
+  // Golden bytes derived from the live Python server's
+  // `auditr_facilitator.identity.canonical_message()` for the same
+  // inputs. Locking this byte-for-byte means an SDK change that
+  // shifts a single space will fail this test BEFORE it ever causes
+  // a `wallet_signature_invalid` rejection in production.
+  const GOLDEN =
+    'Auditr Facilitator Trial Authorization\n' +
+    'Wallet:    0xabcdEF1234567890ABCDEF1234567890ABCDEF12\n' +
+    'Network:   evm\n' +
+    'Timestamp: 2026-05-28T20:00:00+00:00\n' +
+    'Nonce:     0123456789abcdef0123456789abcdef\n';
+
+  it('matches the server canonical_message byte for byte', () => {
+    const out = buildTrialAuthMessage({
+      walletAddress: '0xabcdEF1234567890ABCDEF1234567890ABCDEF12',
+      walletNetwork: 'evm',
+      timestamp: '2026-05-28T20:00:00+00:00',
+      nonce: '0123456789abcdef0123456789abcdef',
     });
-    const successBody = JSON.stringify({
-      key_id: 'abc12345',
-      tier: 'pro',
-      paid_through_at: '2026-07-28T00:00:00+00:00',
+    expect(out).toBe(GOLDEN);
+    expect(out.length).toBe(189);
+  });
+
+  it('ends with a trailing newline', () => {
+    const out = buildTrialAuthMessage({
+      walletAddress: '0x' + '11'.repeat(20),
+      walletNetwork: 'evm',
+      timestamp: '2026-05-28T00:00:00+00:00',
+      nonce: 'ab'.repeat(16),
     });
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(challengeBody, {
-          status: 402,
-          headers: {
-            'content-type': 'application/json',
-            'payment-required': Buffer.from(challengeBody).toString('base64'),
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(successBody, {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
-      );
-    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
-    const renewed = await client.facilitator.renew('pro', { keyId: 'abc12345' });
-    expect(renewed.keyId).toBe('abc12345');
-    expect(renewed.tier).toBe('pro');
-    expect(renewed.paidThroughAt).toBe('2026-07-28T00:00:00+00:00');
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    // The body sent to the renew endpoint is `{ key_id: ... }`, not
-    // `{ keyId: ... }`.
-    const sent = JSON.parse(fetchImpl.mock.calls[0]![1].body as string);
-    expect(sent.key_id).toBe('abc12345');
+    expect(out.endsWith('\n')).toBe(true);
+  });
+
+  it('starts with the canonical header constant', () => {
+    const out = buildTrialAuthMessage({
+      walletAddress: 'GjkSomethingBase58',
+      walletNetwork: 'svm',
+      timestamp: '2026-05-28T00:00:00+00:00',
+      nonce: 'ab'.repeat(16),
+    });
+    expect(out.startsWith(CANONICAL_MESSAGE_HEADER + '\n')).toBe(true);
+  });
+
+  it('preserves the column-12 label alignment', () => {
+    const out = buildTrialAuthMessage({
+      walletAddress: 'X',
+      walletNetwork: 'evm',
+      timestamp: 'T',
+      nonce: 'N'.padEnd(32, 'N'),
+    });
+    const lines = out.split('\n');
+    // Wallet:, Network:, Timestamp:, Nonce: all start at col 0, value at col 11.
+    // (header line, then 4 labeled lines, then trailing empty after split)
+    expect(lines[1]?.startsWith('Wallet:    ')).toBe(true);
+    expect(lines[2]?.startsWith('Network:   ')).toBe(true);
+    expect(lines[3]?.startsWith('Timestamp: ')).toBe(true);
+    expect(lines[4]?.startsWith('Nonce:     ')).toBe(true);
+    // Value column for all four lines is 11.
+    for (const i of [1, 2, 3, 4]) {
+      const colon = lines[i]?.indexOf(':') ?? -1;
+      const valStart = colon + 1;
+      let i2 = valStart;
+      while (lines[i]![i2] === ' ') i2++;
+      expect(i2).toBe(11);
+    }
   });
 });
