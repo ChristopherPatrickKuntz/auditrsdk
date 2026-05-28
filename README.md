@@ -153,7 +153,7 @@ const parsed = auditReportSchema.parse(json);
 
 | Error                  | When                                              |
 | ---------------------- | ------------------------------------------------- |
-| `PaymentRequiredError` | Raw 402 surfaced when using low level helpers     |
+| `PaymentRequiredError` | Internal 402 signal. Only seen if you call the `@internal` helpers directly. |
 | `SignerError`          | The `PaymentSigner` threw or returned invalid data |
 | `HttpError`            | Non 2xx response from the API                     |
 | `TimeoutError`         | `waitForCompletion` exceeded its budget           |

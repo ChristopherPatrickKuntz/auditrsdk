@@ -130,7 +130,11 @@ export class Auditr {
   }
 
   /** @internal */
-  async paidPost<T>(path: string, body: unknown): Promise<{ response: T; settlement?: ReturnType<typeof parsePaymentSettlement> }> {
+  async paidPost<T>(
+    path: string,
+    body: unknown,
+    signal?: AbortSignal,
+  ): Promise<{ response: T; settlement?: ReturnType<typeof parsePaymentSettlement> }> {
     const url = `${this.baseUrl}${path}`;
     const baseHeaders: Record<string, string> = {
       'content-type': 'application/json',
@@ -143,6 +147,7 @@ export class Auditr {
       method: 'POST',
       headers: baseHeaders,
       body: JSON.stringify(body),
+      signal,
     });
 
     let challenge: PaymentRequired;
@@ -150,8 +155,17 @@ export class Auditr {
       const initialBody = await readBodyTruncated(initial);
       assertOk(initial, initialBody);
       // Endpoint settled without payment; unusual but valid for a
-      // promotional or pre paid resource.
-      return { response: JSON.parse(initialBody) as T };
+      // promotional or pre paid resource. Wrap the JSON parse so a
+      // malformed 200 body surfaces as ValidationError rather than a
+      // raw SyntaxError that bypasses the typed error hierarchy.
+      try {
+        return { response: JSON.parse(initialBody) as T };
+      } catch (e) {
+        throw new ValidationError(
+          'Endpoint returned 2xx without a 402, but the body is not valid JSON',
+          e,
+        );
+      }
     } catch (err) {
       if (!(err instanceof PaymentRequiredError)) {
         throw err;
@@ -187,6 +201,7 @@ export class Auditr {
         'payment-signature': signature,
       },
       body: JSON.stringify(body),
+      signal,
     });
 
     const retryBody = await readBodyTruncated(retry);

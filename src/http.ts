@@ -5,7 +5,16 @@
 import { HttpError, PaymentRequiredError, ValidationError } from './errors.js';
 import type { PaymentRequired, PaymentSettlement } from './types.js';
 
-const SDK_VERSION = '0.1.0';
+/**
+ * Replaced at build time by tsup `define` from package.json's
+ * version field (see tsup.config.ts). Keeps the user-agent in
+ * lockstep with the published artifact instead of drifting silently
+ * when the version bumps. The runtime fallback string is only
+ * reached when this module is consumed straight from src/ (e.g.
+ * vitest), where the build-time replacement has not happened.
+ */
+declare const __SDK_VERSION__: string;
+const SDK_VERSION = typeof __SDK_VERSION__ !== 'undefined' ? __SDK_VERSION__ : '0.0.0-dev';
 
 export function buildUserAgent(custom?: string): string {
   const own = `auditrxyz-sdk-js/${SDK_VERSION}`;

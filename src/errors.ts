@@ -14,12 +14,16 @@ export class AuditrError extends Error {
 }
 
 /**
- * The first response from a paid route. Carries the decoded
- * PAYMENT-REQUIRED challenge so the caller's signer can produce the
- * authorization. Callers using `Auditr.audits.<tier>()` will not see
- * this error in normal flow; the SDK handles the 402 -> sign -> retry
- * dance internally. It is surfaced when the caller invokes
- * `client.http.raw()` for advanced use.
+ * Internal flow control signal carrying the decoded PAYMENT-REQUIRED
+ * challenge. The SDK throws this inside `assertOk` when a paid route
+ * returns 402, catches it in the same `paidPost` call, and uses
+ * `err.challenge` to drive the signer. The high level methods
+ * (`audits.<tier>`, `monitoring.<tier>`, `facilitator.signup`) never
+ * surface it to user code; you only see it if you reach into the
+ * `@internal` `paidPost` / `freeGet` helpers directly.
+ *
+ * Exported so advanced consumers who do reach into the internals can
+ * `instanceof` it for control flow.
  */
 export class PaymentRequiredError extends AuditrError {
   override name = 'PaymentRequiredError';

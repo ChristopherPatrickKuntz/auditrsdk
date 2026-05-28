@@ -379,3 +379,192 @@ describe('facilitator.renew', () => {
     ).rejects.toThrow(ValidationError);
   });
 });
+
+describe('paidPost: 2xx without a 402 (free / promo branch)', () => {
+  it('returns the parsed body when the endpoint settles without payment', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          audit_id: 'free-audit-id',
+          tier: 'quick',
+          status: 'created',
+          price_usd: 0,
+          status_url: '/api/x402/audits/free-audit-id',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    const result = await client.audits.quick({
+      scanType: 'site',
+      target: 'https://example.com',
+      tosAccepted: true,
+    });
+    expect(result.auditId).toBe('free-audit-id');
+    expect(result.tier).toBe('quick');
+    // Only one call (no signer round trip).
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('wraps a malformed 2xx body as ValidationError, not SyntaxError', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response('not json at all', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    await expect(
+      client.audits.quick({
+        scanType: 'site',
+        target: 'https://example.com',
+        tosAccepted: true,
+      }),
+    ).rejects.toThrow(ValidationError);
+  });
+});
+
+describe('facilitator.supported', () => {
+  it('returns the kinds array from the facilitator host', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          kinds: [
+            { scheme: 'exact', network: 'eip155:8453', x402Version: 2 },
+            {
+              scheme: 'exact',
+              network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+              x402Version: 2,
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    const kinds = await client.facilitator.supported();
+    expect(kinds).toHaveLength(2);
+    expect(kinds[0]!.network).toBe('eip155:8453');
+    // Must hit the facilitator host, not the auditr-api host.
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const call = fetchImpl.mock.calls[0]!;
+    expect(call[0]).toBe('https://facilitator.auditr.xyz/supported');
+    // No auth required for discovery.
+    const headers = call[1].headers as Record<string, string>;
+    expect(headers.authorization).toBeUndefined();
+  });
+
+  it('throws ValidationError if /supported has no kinds array', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    await expect(client.facilitator.supported()).rejects.toThrow(ValidationError);
+  });
+});
+
+describe('facilitator.adminInfo', () => {
+  it('parses the auth + feePolicy + chains payload', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          service: 'auditr_facilitator',
+          network_mode: 'mainnet',
+          chains: ['evm:base -> 0xABC', 'svm:solana -> XYZ'],
+          fee_policy: {
+            evm_pct: 0.005,
+            evm_floor_usd: 0.02,
+            svm_pct: 0.005,
+            svm_floor_usd: 0.005,
+            extraction_wired: false,
+          },
+          auth: {
+            key_id: 'abc12345',
+            label: 'my bot',
+            tier: 'basic',
+            effective_tier: 'basic',
+            paid_through_at: '2026-06-28T00:00:00+00:00',
+            monthly_settle_quota: 1000,
+            monthly_settle_used: 42,
+            monthly_period_start: '2026-05-01T00:00:00+00:00',
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    const info = await client.facilitator.adminInfo('auditr_pub_abc12345_secret');
+    expect(info.networkMode).toBe('mainnet');
+    expect(info.chains).toHaveLength(2);
+    expect(info.auth.tier).toBe('basic');
+    expect(info.auth.effectiveTier).toBe('basic');
+    expect(info.auth.monthlySettleQuota).toBe(1000);
+    expect(info.auth.monthlySettleUsed).toBe(42);
+    expect(info.feePolicy.extractionWired).toBe(false);
+    // Must send the Bearer to the facilitator host.
+    const call = fetchImpl.mock.calls[0]!;
+    expect(call[0]).toBe('https://facilitator.auditr.xyz/admin/info');
+    const headers = call[1].headers as Record<string, string>;
+    expect(headers.authorization).toBe('Bearer auditr_pub_abc12345_secret');
+  });
+
+  it('requires a token', async () => {
+    const client = new Auditr({ signer: noopSigner() });
+    await expect(client.facilitator.adminInfo('')).rejects.toThrow(ValidationError);
+  });
+});
+
+describe('facilitator.renew (happy path)', () => {
+  it('drives the x402 flow and returns parsed renew response', async () => {
+    const challengeBody = JSON.stringify({
+      x402Version: 2,
+      accepts: [
+        {
+          scheme: 'exact',
+          network: 'eip155:8453',
+          asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          amount: '50000000',
+          payTo: '0xB03E5421f8588ea7C616f3E164461137E2a132E0',
+          maxTimeoutSeconds: 300,
+          extra: { name: 'USD Coin', version: '2' },
+        },
+      ],
+    });
+    const successBody = JSON.stringify({
+      key_id: 'abc12345',
+      tier: 'pro',
+      paid_through_at: '2026-07-28T00:00:00+00:00',
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(challengeBody, {
+          status: 402,
+          headers: {
+            'content-type': 'application/json',
+            'payment-required': Buffer.from(challengeBody).toString('base64'),
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(successBody, {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    const renewed = await client.facilitator.renew('pro', { keyId: 'abc12345' });
+    expect(renewed.keyId).toBe('abc12345');
+    expect(renewed.tier).toBe('pro');
+    expect(renewed.paidThroughAt).toBe('2026-07-28T00:00:00+00:00');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // The body sent to the renew endpoint is `{ key_id: ... }`, not
+    // `{ keyId: ... }`.
+    const sent = JSON.parse(fetchImpl.mock.calls[0]![1].body as string);
+    expect(sent.key_id).toBe('abc12345');
+  });
+});
