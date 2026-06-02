@@ -19,6 +19,38 @@ export const auditStatusSchema = z.enum([
   'failed',
 ]);
 
+/**
+ * Recommendation severity. The backend emits 'informational' (the AI
+ * prompt's enum); 'info' is accepted too for forward/backward
+ * compatibility with finding-style severities.
+ */
+export const recommendationSeveritySchema = z.enum([
+  'critical',
+  'high',
+  'medium',
+  'low',
+  'informational',
+  'info',
+]);
+
+const recommendationObjectSchema = z.object({
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  severity: recommendationSeveritySchema.nullable().optional(),
+  implementation: z.string().nullable().optional(),
+});
+
+/**
+ * Audit recommendations. The current backend returns structured
+ * objects ({ title, description, severity, implementation }); older
+ * reports returned plain strings. Coerce a string to { title } so both
+ * shapes validate and downstream consumers always see an object.
+ */
+export const recommendationSchema = z.preprocess(
+  (val) => (typeof val === 'string' ? { title: val } : val),
+  recommendationObjectSchema,
+);
+
 export const findingSchema = z.object({
   severity: severitySchema,
   title: z.string(),
@@ -39,7 +71,10 @@ export const auditSummarySchema = z.object({
   architecture_review: z.string().optional(),
   functionality_analysis: z.string().optional(),
   security_assessment: z.string().optional(),
-  recommendations: z.array(z.string()).optional(),
+  recommendations: z.array(recommendationSchema).optional(),
+  // Backend field is `grade_justification`; `grade_rationale` kept for
+  // older reports. The client maps whichever is present to gradeRationale.
+  grade_justification: z.string().optional(),
   grade_rationale: z.string().optional(),
 });
 
@@ -47,6 +82,9 @@ export const auditRecordSchema = z.object({
   id: z.string(),
   status: auditStatusSchema,
   score: z.string().nullable().optional(),
+  // Derived tier the report came from (quick / standard / web3). Kept
+  // as a loose string so an unexpected profile never fails validation.
+  scan_profile: z.string().nullable().optional(),
   project_name: z.string().nullable().optional(),
   created_at: z.string(),
   completed_at: z.string().nullable().optional(),

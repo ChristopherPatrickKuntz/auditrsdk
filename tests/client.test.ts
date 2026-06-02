@@ -54,6 +54,50 @@ describe('audits.get', () => {
     expect(result.severityCounts?.low).toBe(1);
   });
 
+  it('parses a modern report: structured recommendations, grade_justification, scan_profile', async () => {
+    const modern = {
+      audit: {
+        id: 'modern-1',
+        status: 'completed',
+        score: 'A',
+        scan_profile: 'web3',
+        created_at: '2026-06-02T01:00:00.000Z',
+        summary: {
+          management_summary: 'Web3 project audit.',
+          grade_justification: 'Strong posture; one low-severity advisory remains.',
+          recommendations: [
+            {
+              title: 'Pin GitHub Actions to commit SHAs',
+              description: 'Tag refs are mutable and can be repointed.',
+              severity: 'informational',
+              implementation: 'Replace @v4 with the full commit SHA.',
+            },
+            // legacy plain-string recommendation must still parse
+            'Rotate the exposed API key',
+          ],
+        },
+      },
+      findings: [],
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(modern), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = new Auditr({ signer: noopSigner(), fetch: fetchImpl });
+    const result = await client.audits.get('modern-1');
+    expect(result.scanProfile).toBe('web3');
+    expect(result.summary?.gradeRationale).toContain('Strong posture');
+    expect(result.summary?.recommendations).toHaveLength(2);
+    expect(result.summary?.recommendations?.[0]).toMatchObject({
+      title: 'Pin GitHub Actions to commit SHAs',
+      severity: 'informational',
+    });
+    // legacy string coerced to { title }
+    expect(result.summary?.recommendations?.[1]?.title).toBe('Rotate the exposed API key');
+  });
+
   it('throws ValidationError on bad shape', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ not: 'a report' }), {

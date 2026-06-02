@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-02
+
+Report-contract alignment with the current backend. Audit reports now
+parse and expose fields the live API actually returns; previously a
+modern report could fail validation or silently drop data.
+
+- **Structured recommendations.** `AuditReport.summary.recommendations`
+  is now `Recommendation[]` (`{ title, description?, severity?,
+  implementation? }`) instead of `string[]`, matching the backend's
+  structured output. A legacy string recommendation is normalised to
+  `{ title }`, so old and new reports both parse. New exported types:
+  `Recommendation`, `RecommendationSeverity`.
+- **`scanProfile`.** `AuditReport.scanProfile` exposes the tier a report
+  came from (`quick` / `standard` / `web3`).
+- **Grade rationale fix.** The backend field is `grade_justification`;
+  the SDK now reads it (falling back to the legacy `grade_rationale`)
+  into `summary.gradeRationale`, which previously came back undefined.
+- **`waitForCompletion` default timeout raised** 10 min to 25 min and
+  the per-tier guidance corrected: web3 scans can run 15-20+ min. The
+  call still returns as soon as the audit reaches a terminal status.
+- Clean build removes the duplicate sourcemap footer in `dist`.
+
 ## [0.3.0] - 2026-05-28
 
 Breaking change to the `auditr.facilitator.*` surface to match the

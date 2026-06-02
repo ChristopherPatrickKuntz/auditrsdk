@@ -97,7 +97,7 @@ export class Auditr {
       );
     }
     this.defaultPollIntervalMs = options.pollIntervalMs ?? 5_000;
-    this.defaultTimeoutMs = options.defaultTimeoutMs ?? 600_000;
+    this.defaultTimeoutMs = options.defaultTimeoutMs ?? 1_500_000;
     this.userAgent = buildUserAgent(options.userAgent);
 
     this.audits = new AuditsApi(this);
@@ -476,6 +476,7 @@ function parseAuditReport(raw: unknown): AuditReport {
     auditId: audit.id,
     status: audit.status,
     grade: audit.score ?? undefined,
+    scanProfile: (audit.scan_profile ?? undefined) as AuditTier | undefined,
     projectName: audit.project_name ?? undefined,
     createdAt: audit.created_at,
     completedAt: audit.completed_at ?? undefined,
@@ -488,8 +489,15 @@ function parseAuditReport(raw: unknown): AuditReport {
           architectureReview: audit.summary.architecture_review,
           functionalityAnalysis: audit.summary.functionality_analysis,
           securityAssessment: audit.summary.security_assessment,
-          recommendations: audit.summary.recommendations,
-          gradeRationale: audit.summary.grade_rationale,
+          recommendations: audit.summary.recommendations?.map((r) => ({
+            title: r.title,
+            description: r.description ?? undefined,
+            severity: r.severity ?? undefined,
+            implementation: r.implementation ?? undefined,
+          })),
+          // Backend uses grade_justification; fall back to the legacy
+          // grade_rationale so older stored reports still surface it.
+          gradeRationale: audit.summary.grade_justification ?? audit.summary.grade_rationale,
         }
       : undefined,
     severityCounts: audit.severity_counts ?? undefined,

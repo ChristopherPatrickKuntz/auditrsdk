@@ -61,9 +61,13 @@ export interface AuditrClientOptions {
 
   /**
    * Default timeout for `waitForCompletion`. Milliseconds. Defaults
-   * to 600000 (ten minutes). The web3 tier produces an audit in
-   * about three minutes in the typical case; the timeout reserves
-   * headroom for queue depth.
+   * to 1500000 (25 minutes). Tiers vary widely: quick is ~1-2 min,
+   * standard ~5-10 min, and web3 can run 15-20+ min under heavier
+   * modules (waymore, katana, nuclei, on-chain posture) — the backend
+   * alone allows the web3 site scan up to 1200s before its own timeout.
+   * `waitForCompletion` returns as soon as the audit reaches a terminal
+   * status, so a generous default only raises the ceiling; pass a
+   * smaller `timeoutMs` per call for quick scans if you want to fail fast.
    */
   defaultTimeoutMs?: number;
 
@@ -212,10 +216,37 @@ export interface Finding {
   references?: string[];
 }
 
+/** Severity of a recommendation. Backend emits 'informational'. */
+export type RecommendationSeverity =
+  | 'critical'
+  | 'high'
+  | 'medium'
+  | 'low'
+  | 'informational'
+  | 'info';
+
+/**
+ * A structured audit recommendation. The backend returns these as
+ * objects (not plain strings). A legacy string recommendation is
+ * normalised to `{ title }`.
+ */
+export interface Recommendation {
+  title: string;
+  description?: string;
+  severity?: RecommendationSeverity;
+  /** Concrete next step (code snippet, config change, or action). */
+  implementation?: string;
+}
+
 export interface AuditReport {
   auditId: string;
   status: AuditStatus;
   grade?: string;
+  /**
+   * The scan tier this report was produced from (quick / standard /
+   * web3), so consumers can interpret depth + module coverage.
+   */
+  scanProfile?: AuditTier;
   projectName?: string;
   createdAt: string;
   completedAt?: string;
@@ -227,7 +258,8 @@ export interface AuditReport {
     architectureReview?: string;
     functionalityAnalysis?: string;
     securityAssessment?: string;
-    recommendations?: string[];
+    recommendations?: Recommendation[];
+    /** Maps from backend `grade_justification` (or legacy `grade_rationale`). */
     gradeRationale?: string;
   };
   severityCounts?: Partial<Record<Severity, number>>;

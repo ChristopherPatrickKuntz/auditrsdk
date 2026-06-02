@@ -45,6 +45,8 @@ export type {
   AuditStatus,
   AuditReport,
   Finding,
+  Recommendation,
+  RecommendationSeverity,
   Severity,
   Chain,
   PaymentToken,
