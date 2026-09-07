@@ -21,6 +21,11 @@ that can sign EIP-3009 typed data.
 
 ## Quick start
 
+This example requires your own `PaymentSigner`. Create `my-signer.js`
+and export `mySigner` after connecting your wallet's signing method;
+the SDK does not provide that file. See [Bring your own signer](#bring-your-own-signer)
+and the [example setup notes](examples/README.md) for adapter templates.
+
 ```ts
 import { Auditr } from '@auditrxyz/sdk';
 import { mySigner } from './my-signer.js';
@@ -83,8 +88,8 @@ import { Auditr, buildTrialAuthMessage } from '@auditrxyz/sdk';
 // 1. Build + sign the canonical trial-authorization message with
 //    your wallet (EIP-191 for EVM, ed25519 for Solana).
 //    `buildTrialAuthMessage` is a byte-exact mirror of the server
-//    verifier, so a successful build guarantees a successful verify
-//    on the server.
+//    verifier. The server also checks the signature, timestamp,
+//    and nonce.
 const timestamp = new Date().toISOString();
 const nonce = Array.from(
   crypto.getRandomValues(new Uint8Array(16)),
@@ -138,7 +143,7 @@ A gas circuit breaker returns **503 with `Retry-After`** during L1
 spikes or degraded price feeds. See
 [examples/facilitator-trial.ts](examples/facilitator-trial.ts) and
 [examples/facilitator-topup.ts](examples/facilitator-topup.ts) for
-working snippets.
+templates that require your wallet/signature setup before use.
 
 The SDK handles the HTTP 402 dance for you. A `POST` to a paid
 endpoint without a `PAYMENT-SIGNATURE` header receives a 402 with a
@@ -158,27 +163,37 @@ interface PaymentSigner {
 ```
 
 The returned string is the base64 value sent in the
-`PAYMENT-SIGNATURE` header. The `examples/` directory ships two
-reference implementations:
+`PAYMENT-SIGNATURE` header. The `examples/` directory includes two
+adapter templates:
 
-- `examples/coinbase-agent-kit.ts` wraps Coinbase Agent Kit's
-  payment helper.
-- `examples/manual-eip3009.ts` builds the EIP-3009
+- [coinbase-agent-kit.ts](examples/coinbase-agent-kit.ts) sketches a
+  Coinbase Agent Kit adapter using a placeholder payment interface.
+  Replace it with the actual API from your installed Agent Kit version.
+- [manual-eip3009.ts](examples/manual-eip3009.ts) shows how to build the EIP-3009
   `transferWithAuthorization` from scratch with a viem-compatible
-  wallet.
+  wallet; you must create the wallet and pass it to the adapter.
+
+These are integration templates, not preconfigured wallet clients.
+See [examples/README.md](examples/README.md) for each file's setup requirements.
 
 ## Validation
 
 Every API response is validated against a Zod schema before being
 returned. A mismatch raises `ValidationError` with the underlying
 schema failure as `cause`. Import the schema independently if you
-need to validate stored or relayed reports:
+need to validate stored or relayed **raw API responses**:
 
 ```ts
 import { auditReportSchema } from '@auditrxyz/sdk/schema';
 
-const parsed = auditReportSchema.parse(json);
+// rawResponse has the API's { audit, findings } envelope.
+const parsed = auditReportSchema.parse(rawResponse);
 ```
+
+The client converts that envelope into the flat, camelCase `AuditReport`
+returned by `audits.get()` and `waitForCompletion()`. The exported schema
+validates the raw response, not this converted result. See the
+[report reference](docs/audit-report-schema.md) for both shapes.
 
 ## Errors
 
@@ -212,9 +227,10 @@ grading, summary generation) is governed by the Auditr backend. See
 
 ## Versioning
 
-This package follows semantic versioning. Breaking changes ship in
-major releases with at least one prior minor that emits deprecation
-warnings.
+This package follows semantic versioning. Before 1.0, minor releases
+may include breaking changes; review the [changelog](CHANGELOG.md)
+before upgrading. From 1.0 onward, breaking changes ship in major
+releases with at least one prior minor that emits deprecation warnings.
 
 ## Security
 

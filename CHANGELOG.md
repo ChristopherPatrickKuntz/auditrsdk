@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- Clarify signer prerequisites and example templates, refresh the report
+  reference for v0.4.0, and correct contributor setup and release links.
+
 ## [0.4.0] - 2026-06-02
 
 Report-contract alignment with the current backend. Audit reports now
@@ -175,11 +180,11 @@ contents of this entry are everything shipped to the registry.
   instead of a bare `SyntaxError`, matching the wrapping every
   other JSON parse site already does.
 
-## [0.1.0]
+## 0.1.0 (unreleased)
 
 ### Added
 
-- Initial public release of the `Auditr` client.
+- Initial implementation of the `Auditr` client, later published in 0.2.0.
 - `audits.quick`, `audits.standard`, and `audits.web3` paid creators.
 - `audits.get` and `audits.waitForCompletion` poll helpers.
 - Typed error hierarchy: `AuditrError`, `PaymentRequiredError`,
@@ -189,7 +194,7 @@ contents of this entry are everything shipped to the registry.
   and a manual viem implementation.
 - TSDoc on the entire public surface.
 
-[Unreleased]: https://github.com/ChristopherPatrickKuntz/auditrsdk/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ChristopherPatrickKuntz/auditrsdk/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ChristopherPatrickKuntz/auditrsdk/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ChristopherPatrickKuntz/auditrsdk/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/ChristopherPatrickKuntz/auditrsdk/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/ChristopherPatrickKuntz/auditrsdk/releases/tag/v0.1.0
+[0.2.0]: https://github.com/ChristopherPatrickKuntz/auditrsdk/tree/v0.2.0

@@ -21,9 +21,10 @@ that keep it small are welcomed.
 
 ```bash
 git clone https://github.com/ChristopherPatrickKuntz/auditrsdk.git
-cd sdk
+cd auditrsdk
 npm install
 npm run typecheck
+npm run typecheck:examples
 npm run test
 npm run lint
 ```
